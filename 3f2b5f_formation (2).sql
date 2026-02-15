@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Hôte : 3f2b5f.myd.infomaniak.com
--- Généré le :  Dim 15 fév. 2026 à 20:51
+-- Généré le :  Dim 15 fév. 2026 à 20:56
 -- Version du serveur :  10.11.14-MariaDB-deb11-log
 -- Version de PHP :  7.4.33
 
@@ -21,6 +21,8 @@ SET time_zone = "+00:00";
 --
 -- Base de données :  `3f2b5f_formation`
 --
+CREATE DATABASE IF NOT EXISTS `3f2b5f_formation` DEFAULT CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci;
+USE `3f2b5f_formation`;
 
 -- --------------------------------------------------------
 
@@ -166,7 +168,8 @@ INSERT INTO `logs` (`id`, `utilisateur`, `action`, `date_action`) VALUES
 (356, 'adchat', 'A consulté le tableau de bord', '2026-02-15 19:48:40'),
 (357, 'adchat', 'A consulté le tableau de bord', '2026-02-15 19:49:30'),
 (358, 'adchat', 'A consulté le tableau de bord', '2026-02-15 19:51:11'),
-(359, 'adchat', 'A consulté le tableau de bord', '2026-02-15 19:51:15');
+(359, 'adchat', 'A consulté le tableau de bord', '2026-02-15 19:51:15'),
+(360, 'nivokai', 'A consulté le tableau de bord', '2026-02-15 19:52:56');
 
 -- --------------------------------------------------------
 
@@ -443,7 +446,7 @@ ALTER TABLE `formation_staff`
 -- AUTO_INCREMENT pour la table `logs`
 --
 ALTER TABLE `logs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=359;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=361;
 
 --
 -- AUTO_INCREMENT pour la table `membres_formes`
