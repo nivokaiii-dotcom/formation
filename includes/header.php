@@ -15,8 +15,8 @@ if (!isset($_SESSION['user'])) {
     SYNCHRONISATION ET VÉRIFICATION DU RÔLE
    ============================================================ */
 // On récupère le rôle actuel directement en BDD
-$stmtCheck = $pdo->prepare("SELECT role FROM users WHERE username = ?");
-$stmtCheck->execute([$_SESSION['user']['username']]);
+$stmtCheck = $pdo->prepare("SELECT role FROM users WHERE discord_id = ?");
+$stmtCheck->execute([$_SESSION['user']['discord_id']]);
 $userFreshData = $stmtCheck->fetch(PDO::FETCH_ASSOC);
 
 // Sécurité : Si l'utilisateur n'existe plus ou si son rôle est NULL/vide
@@ -32,8 +32,9 @@ if ($_SESSION['user']['role'] !== $userFreshData['role']) {
 }
 
 $role = $_SESSION['user']['role'];
+$discord_id = htmlspecialchars($_SESSION['user']['discord_id'] ?? 'Staff');
 $username = htmlspecialchars($_SESSION['user']['username'] ?? 'Staff');
-$avatar_user = $_SESSION['user']['avatar'] ?? 'https://ui-avatars.com/api/?name='.$username.'&background=random';
+$avatar_user = $_SESSION['user']['avatar'] ?? 'https://ui-avatars.com/api/?name='.$discord_id.'&background=random';
 $current_page = basename($_SERVER['PHP_SELF']);
 
 // --- CONFIGURATION LOGO LOCAL ---
