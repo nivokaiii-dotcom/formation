@@ -3,9 +3,32 @@ require 'config.php';
 require 'includes/header.php';
 
 /* =========================
-    CONFIGURATION DISCORD
+    CONFIGURATION & LOGS
 ========================= */
 define('DISCORD_WEBHOOK_URL', 'https://discord.com/api/webhooks/1471797709320224889/2aMqQOguDj5Y163sghyyvHThxo3eX_9NGg4kGd_OF7o_54jce1F1s8PwCiQ1nXhzF_dv');
+
+// Fonction pour ajouter un log dans la table logs
+function addLog($pdo, $action) {
+    // On essaie de récupérer le pseudo dans l'ordre de priorité des clés de session courantes
+    $user = 'Anonyme';
+    if (isset($_SESSION['user']['username'])) {
+        $user = $_SESSION['user']['username'];
+    } elseif (isset($_SESSION['username'])) {
+        $user = $_SESSION['username'];
+    } elseif (isset($_SESSION['user_pseudo'])) {
+        $user = $_SESSION['user_pseudo'];
+    } elseif (isset($_SESSION['pseudo'])) {
+        $user = $_SESSION['pseudo'];
+    }
+
+    try {
+        $stmt = $pdo->prepare("INSERT INTO logs (utilisateur, action, date_action) VALUES (?, ?, NOW())");
+        $stmt->execute([$user, $action]);
+    } catch (PDOException $e) {
+        // Optionnel : logger l'erreur SQL dans un fichier pour le debug
+        error_log("Erreur Log : " . $e->getMessage());
+    }
+}
 
 function syncDiscordPlanning($pdo) {
     $dateObj = new DateTime();
@@ -42,12 +65,7 @@ function syncDiscordPlanning($pdo) {
         } else {
             $text = "*Aucune session prévue*";
         }
-
-        $fields[] = [
-            "name" => "─── {$dayLabel} ───",
-            "value" => $text,
-            "inline" => false
-        ];
+        $fields[] = ["name" => "─── {$dayLabel} ───", "value" => $text, "inline" => false];
     }
 
     $payload = [
@@ -64,14 +82,8 @@ function syncDiscordPlanning($pdo) {
 
     $log = $pdo->query("SELECT message_id FROM discord_logs WHERE id = 1")->fetch();
     $messageId = $log['message_id'] ?? null;
-
-    $url = DISCORD_WEBHOOK_URL . "?wait=true";
-    $method = "POST";
-
-    if ($messageId) {
-        $url = DISCORD_WEBHOOK_URL . "/messages/" . $messageId;
-        $method = "PATCH";
-    }
+    $url = DISCORD_WEBHOOK_URL . ($messageId ? "/messages/" . $messageId : "?wait=true");
+    $method = $messageId ? "PATCH" : "POST";
 
     $ch = curl_init($url);
     curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
@@ -88,29 +100,68 @@ function syncDiscordPlanning($pdo) {
 }
 
 /* =========================
+    LOGIQUE DE NAVIGATION
+========================= */
+$weekOffset = isset($_GET['week']) ? (int)$_GET['week'] : 0;
+$dateNav = new DateTime();
+$dateNav->modify('monday this week');
+if ($weekOffset !== 0) { $dateNav->modify("$weekOffset weeks"); }
+$mondayNav = $dateNav->format('Y-m-d');
+$sundayNav = (clone $dateNav)->modify('+6 days')->format('Y-m-d');
+
+/* =========================
     GESTION POST
 ========================= */
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (isset($_POST['add'])) {
-        $stmt = $pdo->prepare("INSERT INTO planning (formation_id, date, heure, formateur) VALUES (?, ?, ?, ?)");
-        $stmt->execute([$_POST['formation_id'], $_POST['date'], $_POST['heure'], $_POST['formateur']]);
-        syncDiscordPlanning($pdo);
-        $_SESSION['flash'] = ["success", "Session ajoutée avec succès !"];
-        header("Location: admin_add_planning.php"); exit();
+    if (isset($_POST['add']) || isset($_POST['edit'])) {
+        $form_id = $_POST['formation_id'];
+        $date = $_POST['date'];
+        $heure = $_POST['heure'];
+        $formateur = $_POST['formateur'];
+        $id_existant = $_POST['id'] ?? 0;
+
+        $stmtF = $pdo->prepare("SELECT titre FROM formations WHERE id = ?");
+        $stmtF->execute([$form_id]);
+        $formation_nom = $stmtF->fetchColumn();
+
+        $stmt = $pdo->prepare("SELECT heure FROM planning WHERE date = ? AND id != ?");
+        $stmt->execute([$date, $id_existant]);
+        $existing_sessions = $stmt->fetchAll();
+        
+        $conflict = false;
+        $new_time = strtotime($heure);
+        foreach ($existing_sessions as $sess) {
+            $sess_time = strtotime($sess['heure']);
+            $diff = abs($new_time - $sess_time) / 60;
+            if ($diff < 30) { $conflict = true; break; }
+        }
+
+        if ($conflict) {
+            $_SESSION['flash'] = ["danger", "Conflit : Une session existe déjà à moins de 30 min d'intervalle."];
+        } else {
+            if (isset($_POST['add'])) {
+                $stmt = $pdo->prepare("INSERT INTO planning (formation_id, date, heure, formateur) VALUES (?, ?, ?, ?)");
+                $stmt->execute([$form_id, $date, $heure, $formateur]);
+                addLog($pdo, "Planning : Ajout session '$formation_nom' le $date à $heure");
+                $_SESSION['flash'] = ["success", "Session ajoutée !"];
+            } else {
+                $stmt = $pdo->prepare("UPDATE planning SET formation_id=?, date=?, heure=?, formateur=? WHERE id=?");
+                $stmt->execute([$form_id, $date, $heure, $formateur, $id_existant]);
+                addLog($pdo, "Planning : Modification session ID #$id_existant ($formation_nom)");
+                $_SESSION['flash'] = ["info", "Session mise à jour !"];
+            }
+            syncDiscordPlanning($pdo);
+        }
+        header("Location: admin_add_planning.php?week=$weekOffset"); exit();
     }
-    if (isset($_POST['edit'])) {
-        $stmt = $pdo->prepare("UPDATE planning SET formation_id=?, date=?, heure=?, formateur=? WHERE id=?");
-        $stmt->execute([$_POST['formation_id'], $_POST['date'], $_POST['heure'], $_POST['formateur'], $_POST['id']]);
-        syncDiscordPlanning($pdo);
-        $_SESSION['flash'] = ["info", "Session mise à jour !"];
-        header("Location: admin_add_planning.php"); exit();
-    }
+
     if (isset($_POST['delete'])) {
         $stmt = $pdo->prepare("DELETE FROM planning WHERE id=?");
         $stmt->execute([$_POST['id']]);
+        addLog($pdo, "Planning : Suppression session ID #".$_POST['id']);
         syncDiscordPlanning($pdo);
         $_SESSION['flash'] = ["danger", "Session supprimée !"];
-        header("Location: admin_add_planning.php"); exit();
+        header("Location: admin_add_planning.php?week=$weekOffset"); exit();
     }
 }
 
@@ -118,59 +169,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     REQUÊTES AFFICHAGE
 ========================= */
 $formations = $pdo->query("SELECT * FROM formations ORDER BY titre ASC")->fetchAll(PDO::FETCH_ASSOC);
-$formateurs = $pdo->query("SELECT f.pseudo, u.avatar FROM formateurs f LEFT JOIN users u ON f.discord_id = u.discord_id ORDER BY f.pseudo ASC")->fetchAll(PDO::FETCH_ASSOC);
+$formateurs_list = $pdo->query("SELECT f.pseudo FROM formateurs f ORDER BY f.pseudo ASC")->fetchAll(PDO::FETCH_ASSOC);
 
-$planning = $pdo->query("
+$stmt = $pdo->prepare("
     SELECT p.*, f.titre AS formation_titre, u.avatar
     FROM planning p
     LEFT JOIN formations f ON f.id = p.formation_id
     LEFT JOIN formateurs fm ON p.formateur = fm.pseudo
     LEFT JOIN users u ON fm.discord_id = u.discord_id
-    WHERE YEARWEEK(p.date, 1) = YEARWEEK(CURDATE(), 1)
+    WHERE p.date BETWEEN ? AND ?
     ORDER BY p.date ASC, p.heure ASC
-")->fetchAll(PDO::FETCH_ASSOC);
+");
+$stmt->execute([$mondayNav, $sundayNav]);
+$planning = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 $flash = $_SESSION['flash'] ?? null;
 unset($_SESSION['flash']);
 ?>
 
 <style>
-    /* Correction pour le footer en bas */
-    html, body {
-        height: 100%;
-        margin: 0;
-    }
-    body {
-        display: flex;
-        flex-direction: column;
-        min-height: 100vh;
-    }
-    .main-content {
-        flex: 1 0 auto;
-    }
-
-    .avatar-table { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; border: 1px solid var(--border-color); }
-    .table-container { 
-        background: var(--card-bg); 
-        color: var(--text-main);
-        border-radius: 15px; 
-        box-shadow: 0 4px 12px rgba(0,0,0,0.1); 
-        padding: 20px; 
-    }
-    [data-bs-theme="dark"] .table { color: #f1f5f9; }
-    [data-bs-theme="dark"] .text-dark { color: #fff !important; }
-    [data-bs-theme="dark"] .modal-content { background-color: var(--card-bg); border: 1px solid var(--border-color); }
-    .btn-add { border-radius: 10px; font-weight: 600; padding: 10px 20px; }
+    body { display: flex; flex-direction: column; min-height: 100vh; }
+    .main-content { flex: 1 0 auto; }
+    .avatar-table { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
+    .table-container { background: var(--bs-card-bg); border-radius: 15px; padding: 20px; }
+    .nav-week { background: var(--bs-card-bg); padding: 10px 20px; border-radius: 10px; display: inline-flex; align-items: center; gap: 15px; }
 </style>
 
 <div class="main-content">
     <div class="container py-5">
-        <div class="d-flex justify-content-between align-items-center mb-4">
+        <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-3">
             <div>
                 <h2 class="fw-bold mb-0">⚙️ Gestion du Planning</h2>
-                <p class="text-muted">Semaine du <?= date('d/m', strtotime('monday this week')) ?> au <?= date('d/m', strtotime('sunday this week')) ?></p>
+                <div class="mt-2 nav-week shadow-sm border">
+                    <a href="?week=<?= $weekOffset - 1 ?>" class="btn btn-sm btn-outline-secondary"><i class="bi bi-chevron-left"></i></a>
+                    <span class="fw-bold small">Semaine du <?= date('d/m', strtotime($mondayNav)) ?> au <?= date('d/m', strtotime($sundayNav)) ?></span>
+                    <a href="?week=<?= $weekOffset + 1 ?>" class="btn btn-sm btn-outline-secondary"><i class="bi bi-chevron-right"></i></a>
+                    <?php if($weekOffset !== 0): ?>
+                        <a href="admin_add_planning.php" class="btn btn-sm btn-link text-decoration-none">Aujourd'hui</a>
+                    <?php endif; ?>
+                </div>
             </div>
-            <button class="btn btn-success btn-add shadow-sm" data-bs-toggle="modal" data-bs-target="#addModal">
+            <button class="btn btn-success px-4 shadow-sm" data-bs-toggle="modal" data-bs-target="#addModal">
                 <i class="bi bi-plus-circle me-2"></i> Nouvelle Session
             </button>
         </div>
@@ -182,7 +221,7 @@ unset($_SESSION['flash']);
             </div>
         <?php endif; ?>
 
-        <div class="table-container shadow-sm mb-5">
+        <div class="table-container shadow-sm border">
             <div class="table-responsive">
                 <table class="table table-hover align-middle mb-0">
                     <thead class="table-light">
@@ -195,13 +234,13 @@ unset($_SESSION['flash']);
                     </thead>
                     <tbody>
                         <?php if (empty($planning)): ?>
-                            <tr><td colspan="4" class="text-center py-4 text-muted">Aucune session cette semaine.</td></tr>
+                            <tr><td colspan="4" class="text-center py-5 text-muted">Aucune session cette semaine.</td></tr>
                         <?php else: ?>
                             <?php foreach ($planning as $p): 
                                 $avatarUrl = !empty($p['avatar']) ? $p['avatar'] : 'https://ui-avatars.com/api/?name='.urlencode($p['formateur']??'').'&background=random';
                             ?>
                             <tr>
-                                <td><span class="fw-bold text-dark"><?= htmlspecialchars($p['formation_titre'] ?? 'N/A') ?></span></td>
+                                <td><span class="fw-bold"><?= htmlspecialchars($p['formation_titre'] ?? 'N/A') ?></span></td>
                                 <td>
                                     <div class="d-flex align-items-center">
                                         <i class="bi bi-calendar3 me-2 text-primary"></i>
@@ -235,7 +274,7 @@ unset($_SESSION['flash']);
 
 <div class="modal fade" id="addModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
-        <form method="POST" class="modal-content shadow">
+        <form method="POST" class="modal-content">
             <div class="modal-header bg-success text-white">
                 <h5 class="modal-title fw-bold">Ajouter une session</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -256,7 +295,7 @@ unset($_SESSION['flash']);
                 <div class="mb-0">
                     <label class="small fw-bold">Formateur</label>
                     <select name="formateur" class="form-select" required>
-                        <?php foreach ($formateurs as $f): ?>
+                        <?php foreach ($formateurs_list as $f): ?>
                             <option value="<?= htmlspecialchars($f['pseudo']) ?>"><?= htmlspecialchars($f['pseudo']) ?></option>
                         <?php endforeach; ?>
                     </select>
@@ -269,7 +308,7 @@ unset($_SESSION['flash']);
 
 <div class="modal fade" id="editModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
-        <form method="POST" class="modal-content shadow">
+        <form method="POST" class="modal-content">
             <input type="hidden" name="id" id="edit_id">
             <div class="modal-header bg-warning">
                 <h5 class="modal-title fw-bold">Modifier la session</h5>
@@ -291,7 +330,7 @@ unset($_SESSION['flash']);
                 <div>
                     <label class="small fw-bold">Formateur</label>
                     <select name="formateur" id="edit_formateur" class="form-select" required>
-                        <?php foreach ($formateurs as $f): ?>
+                        <?php foreach ($formateurs_list as $f): ?>
                             <option value="<?= htmlspecialchars($f['pseudo']) ?>"><?= htmlspecialchars($f['pseudo']) ?></option>
                         <?php endforeach; ?>
                     </select>
@@ -304,7 +343,7 @@ unset($_SESSION['flash']);
 
 <div class="modal fade" id="deleteModal" tabindex="-1">
     <div class="modal-dialog modal-sm modal-dialog-centered">
-        <form method="POST" class="modal-content border-0 shadow">
+        <form method="POST" class="modal-content border-0">
             <input type="hidden" name="id" id="delete_id">
             <div class="modal-body text-center p-4">
                 <i class="bi bi-exclamation-triangle text-danger fs-1"></i>
@@ -321,11 +360,8 @@ unset($_SESSION['flash']);
 
 <script>
     document.addEventListener('DOMContentLoaded', function() {
-        const editModalEl = document.getElementById('editModal');
-        const deleteModalEl = document.getElementById('deleteModal');
-        
-        window.editModalObj = new bootstrap.Modal(editModalEl);
-        window.deleteModalObj = new bootstrap.Modal(deleteModalEl);
+        window.editModalObj = new bootstrap.Modal(document.getElementById('editModal'));
+        window.deleteModalObj = new bootstrap.Modal(document.getElementById('deleteModal'));
     });
 
     function openEditModal(id, formationId, date, heure, formateur) {
