@@ -1,35 +1,48 @@
 <?php
 session_start();
 
-try {
-    // Connexion à la base de données MySQL sur Infomaniak
-    $pdo = new PDO(
-        "mysql:host=3f2b5f.myd.infomaniak.com;dbname=3f2b5f_formation;charset=utf8",
-        "3f2b5f_formation",
-        "Trizomique@1234"
-    );
+/**
+ * Fonction simple pour charger les variables d'environnement
+ * du fichier .env vers $_ENV
+ */
+function loadEnv($path) {
+    if (!file_exists($path)) return;
+    $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    foreach ($lines as $line) {
+        if (strpos(trim($line), '#') === 0) continue;
+        list($name, $value) = explode('=', $line, 2);
+        $_ENV[trim($name)] = trim($value);
+    }
+}
 
-    // Pour afficher les erreurs SQL si problème
+// Chargement du fichier .env
+loadEnv(__DIR__ . '/.env');
+
+try {
+    // Connexion à la base de données via les variables d'environnement
+    $pdo = new PDO(
+        "mysql:host=" . $_ENV['DB_HOST'] . ";dbname=" . $_ENV['DB_NAME'] . ";charset=utf8",
+        $_ENV['DB_USER'],
+        $_ENV['DB_PASS']
+    );
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
 } catch (PDOException $e) {
-    // Arrêt du script et affichage de l'erreur si connexion impossible
-    die("Erreur de connexion à la base de données : " . $e->getMessage());
+    // En production, évite d'afficher $e->getMessage() qui peut montrer ton hôte SQL
+    die("Erreur de connexion à la base de données.");
 }
 
-// Identifiants pour OAuth ou API
-$client_id = "1471140202268328120";
-$client_secret = "h-z0R0Avpodv0QyQc-N6gboGvlWMzEc-";
-$redirect_uri = "https://formation.tastytom.ch/callback.php";
+// Identifiants OAuth
+$client_id     = $_ENV['DISCORD_CLIENT_ID'];
+$client_secret = $_ENV['DISCORD_CLIENT_SECRET'];
+$redirect_uri  = $_ENV['DISCORD_REDIRECT_URI'];
 
-// Liste des administrateurs
-$admins = [
-    "882717172575653928"
-];
+// Liste des administrateurs (on transforme la chaîne du .env en tableau)
+$super_admins = explode(',', $_ENV['ADMIN_IDS']);
 
 function insertLog($pdo, $action) {
     $user = $_SESSION['user']['username'] ?? 'Système';
-    $stmt = $pdo->prepare("INSERT INTO logs (utilisateur, action) VALUES (?, ?)");
+    $stmt = $pdo->prepare("INSERT INTO logs (utilisateur, action, date_action) VALUES (?, ?, NOW())");
     $stmt->execute([$user, $action]);
 }
 ?>
