@@ -6,6 +6,25 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
+/* ==================================
+    FONCTION DE LOGS
+================================== */
+function addLog($pdo, $action) {
+    $user = 'Anonyme';
+    if (isset($_SESSION['user']['username'])) {
+        $user = $_SESSION['user']['username'];
+    } elseif (isset($_SESSION['username'])) {
+        $user = $_SESSION['username'];
+    }
+
+    try {
+        $stmt = $pdo->prepare("INSERT INTO logs (utilisateur, action, date_action) VALUES (?, ?, NOW())");
+        $stmt->execute([$user, $action]);
+    } catch (PDOException $e) {
+        error_log("Erreur Log : " . $e->getMessage());
+    }
+}
+
 // Définition de la permission (true si admin/modérateur, false si 'user')
 $can_edit = isset($_SESSION['user']['role']) && $_SESSION['user']['role'] !== 'user';
 
@@ -28,6 +47,8 @@ if ($can_edit) {
         if (!empty($pseudo) && !empty($discord_id)) {
             $stmt = $pdo->prepare("INSERT INTO membres_formes (discord_id, pseudo, role_obtenu, formation_id, date_reussite) VALUES (?, ?, ?, NULL, CURDATE())");
             $stmt->execute([$discord_id, $pseudo, $role]);
+            
+            addLog($pdo, "Réussites : Création du profil staff pour '$pseudo' ($role)");
         }
         redirectWithState($_POST['current_tab'], 1, 0);
     }
@@ -37,6 +58,8 @@ if ($can_edit) {
         $pseudo = $_POST['pseudo'];
         $stmt = $pdo->prepare("DELETE FROM membres_formes WHERE pseudo = ?");
         $stmt->execute([$pseudo]);
+        
+        addLog($pdo, "Réussites : Suppression complète du profil de '$pseudo'");
         redirectWithState($_POST['current_tab'], $_POST['current_page'], 0);
     }
 
@@ -49,12 +72,18 @@ if ($can_edit) {
         $current_page = $_POST['current_page'] ?? 1;
         $scroll_pos = $_POST['scroll_pos'] ?? 0;
 
+        // Récupérer le nom de la formation pour le log
+        $stF = $pdo->prepare("SELECT titre FROM formations WHERE id = ?");
+        $stF->execute([$formation_id]);
+        $fTitre = $stF->fetchColumn();
+
         $check = $pdo->prepare("SELECT id FROM membres_formes WHERE pseudo = ? AND formation_id = ?");
         $check->execute([$pseudo, $formation_id]);
         $existing = $check->fetch();
 
         if ($existing) {
             $pdo->prepare("DELETE FROM membres_formes WHERE id = ?")->execute([$existing['id']]);
+            addLog($pdo, "Réussites : Retrait formation '$fTitre' pour $pseudo");
         } else {
             $stmtInfo = $pdo->prepare("SELECT discord_id, role_obtenu FROM membres_formes WHERE pseudo = ? LIMIT 1");
             $stmtInfo->execute([$pseudo]);
@@ -63,6 +92,8 @@ if ($can_edit) {
             if ($info) {
                 $pdo->prepare("INSERT INTO membres_formes (discord_id, pseudo, role_obtenu, formation_id, date_reussite, formateur_nom) VALUES (?, ?, ?, ?, CURDATE(), ?)")
                     ->execute([$info['discord_id'], $pseudo, $info['role_obtenu'], $formation_id, $formateur]);
+                
+                addLog($pdo, "Réussites : Validation formation '$fTitre' pour $pseudo");
             }
         }
         redirectWithState($current_tab, $current_page, $scroll_pos);
@@ -70,8 +101,12 @@ if ($can_edit) {
 
     // ACTION : CHANGER LE GRADE
     if (isset($_POST['update_role_trigger'])) {
+        $new_role = $_POST['new_role'];
+        $pseudo = $_POST['pseudo'];
         $stmt = $pdo->prepare("UPDATE membres_formes SET role_obtenu = ? WHERE pseudo = ?");
-        $stmt->execute([$_POST['new_role'], $_POST['pseudo']]);
+        $stmt->execute([$new_role, $pseudo]);
+        
+        addLog($pdo, "Réussites : Changement de grade pour $pseudo vers $new_role");
         redirectWithState($_POST['current_tab'], $_POST['current_page'], $_POST['scroll_pos']);
     }
 }
@@ -126,7 +161,7 @@ foreach ($all_formations as $f) {
 <style>
     body { background-color: var(--bs-body-bg); color: var(--bs-body-color); }
     .table-responsive { border-radius: 12px; background: var(--bs-card-bg); border: 1px solid var(--bs-border-color); }
-    .badge-toggle { display: inline-flex; align-items: center; justify-content: center; padding: 8px 14px; border-radius: 50px; font-size: 0.65rem; font-weight: 800; border: none; transition: 0.2s; width: 85px; text-decoration: none; }
+    .badge-toggle { display: inline-flex; align-items: center; justify-content: center; padding: 8px 14px; border-radius: 50px; font-size: 0.65rem; font-weight: 800; border: none; transition: 0.2s; width: 85px; text-decoration: none; cursor: pointer; }
     .btn-valid { background-color: #10b981; color: white; }
     <?php if($can_edit): ?>
     .btn-valid:hover { background-color: #ef4444; color: white; }
@@ -228,13 +263,13 @@ foreach ($all_formations as $f) {
                                     <input type="hidden" name="scroll_pos" class="scroll_input">
                                     <input type="hidden" name="update_role_trigger" value="1">
                                     <input type="hidden" name="new_role" value="<?= ($active_tab === 'tab-sup') ? 'Modérateur' : 'Support' ?>">
-                                    <button type="submit" class="btn btn-sm btn-light border"><i class="bi bi-arrow-left-right text-primary"></i></button>
+                                    <button type="submit" class="btn btn-sm btn-light border" title="Changer de Grade"><i class="bi bi-arrow-left-right text-primary"></i></button>
                                 </form>
-                                <form method="POST" onsubmit="return confirm('Supprimer ?');">
+                                <form method="POST" onsubmit="return confirm('Supprimer ce membre du staff ?');">
                                     <input type="hidden" name="pseudo" value="<?= htmlspecialchars($pseudo) ?>">
                                     <input type="hidden" name="current_tab" value="<?= $active_tab ?>">
                                     <input type="hidden" name="current_page" value="<?= $current_page_num ?>">
-                                    <button type="submit" name="delete_member" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+                                    <button type="submit" name="delete_member" class="btn btn-sm btn-outline-danger" title="Supprimer"><i class="bi bi-trash"></i></button>
                                 </form>
                             </div>
                         </td>
@@ -268,14 +303,14 @@ foreach ($all_formations as $f) {
                 <input type="hidden" name="current_tab" value="<?= $active_tab ?>">
                 <div class="mb-3">
                     <label class="form-label fw-bold">Pseudo</label>
-                    <input type="text" name="new_pseudo" class="form-control" required>
+                    <input type="text" name="new_pseudo" class="form-control" placeholder="ex: JohnDoe" required>
                 </div>
                 <div class="mb-3">
                     <label class="form-label fw-bold">ID Discord</label>
-                    <input type="text" name="new_discord_id" class="form-control" required>
+                    <input type="text" name="new_discord_id" class="form-control" placeholder="ex: 1234567890" required>
                 </div>
                 <div class="mb-3">
-                    <label class="form-label fw-bold">Grade</label>
+                    <label class="form-label fw-bold">Grade Initial</label>
                     <select name="new_role" class="form-select">
                         <option value="Support" <?= $active_tab == 'tab-sup' ? 'selected' : '' ?>>Support</option>
                         <option value="Modérateur" <?= $active_tab == 'tab-mod' ? 'selected' : '' ?>>Modérateur</option>
@@ -291,18 +326,22 @@ foreach ($all_formations as $f) {
 <?php endif; ?>
 
 <script>
+    // Gestion du scroll après rechargement
     window.addEventListener('load', () => {
-        const scrollTarget = <?= (int)$scroll_to ?>;
+        const urlParams = new URLSearchParams(window.location.search);
+        const scrollTarget = parseInt(urlParams.get('scroll')) || 0;
         if (scrollTarget > 0) window.scrollTo(0, scrollTarget);
     });
 
+    // Capture de la position du scroll lors de la validation
     document.querySelectorAll('.action-form').forEach(form => {
         form.addEventListener('submit', function() {
             let input = this.querySelector('.scroll_input');
-            if(input) input.value = window.scrollY;
+            if(input) input.value = Math.floor(window.scrollY);
         });
     });
 
+    // Recherche en temps réel
     document.getElementById('searchInput').addEventListener('input', function() {
         let val = this.value.toLowerCase();
         document.querySelectorAll('.member-row').forEach(row => {
