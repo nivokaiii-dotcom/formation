@@ -7,7 +7,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 /* ==================================
-    FONCTION DE LOGS
+    FONCTION DE LOGS (SQL Server)
 ================================== */
 function addLog($pdo, $action) {
     $user = 'Anonyme';
@@ -18,18 +18,19 @@ function addLog($pdo, $action) {
     }
 
     try {
-        $stmt = $pdo->prepare("INSERT INTO logs (utilisateur, action, date_action) VALUES (?, ?, NOW())");
+        // GETDATE() au lieu de NOW()
+        $stmt = $pdo->prepare("INSERT INTO logs (utilisateur, action, date_action) VALUES (?, ?, GETDATE())");
         $stmt->execute([$user, $action]);
     } catch (PDOException $e) {
         error_log("Erreur Log : " . $e->getMessage());
     }
 }
 
-// Définition de la permission (true si admin/modérateur, false si 'user')
+// Permission
 $can_edit = isset($_SESSION['user']['role']) && $_SESSION['user']['role'] !== 'user';
 
 /* ==================================
-    1. ACTIONS (TRAITEMENT) - Sécurisées
+    1. ACTIONS (TRAITEMENT)
 ================================== */
 
 function redirectWithState($tab, $page, $scroll) {
@@ -37,7 +38,6 @@ function redirectWithState($tab, $page, $scroll) {
     exit();
 }
 
-// On n'exécute les actions QUE si l'utilisateur a les droits
 if ($can_edit) {
     // ACTION : AJOUTER UN NOUVEAU MEMBRE
     if (isset($_POST['add_new_member'])) {
@@ -45,7 +45,8 @@ if ($can_edit) {
         $discord_id = trim($_POST['new_discord_id']);
         $role = $_POST['new_role'];
         if (!empty($pseudo) && !empty($discord_id)) {
-            $stmt = $pdo->prepare("INSERT INTO membres_formes (discord_id, pseudo, role_obtenu, formation_id, date_reussite) VALUES (?, ?, ?, NULL, CURDATE())");
+            // CAST(GETDATE() AS DATE) au lieu de CURDATE()
+            $stmt = $pdo->prepare("INSERT INTO membres_formes (discord_id, pseudo, role_obtenu, formation_id, date_reussite) VALUES (?, ?, ?, NULL, CAST(GETDATE() AS DATE))");
             $stmt->execute([$discord_id, $pseudo, $role]);
             
             addLog($pdo, "Réussites : Création du profil staff pour '$pseudo' ($role)");
@@ -72,7 +73,6 @@ if ($can_edit) {
         $current_page = $_POST['current_page'] ?? 1;
         $scroll_pos = $_POST['scroll_pos'] ?? 0;
 
-        // Récupérer le nom de la formation pour le log
         $stF = $pdo->prepare("SELECT titre FROM formations WHERE id = ?");
         $stF->execute([$formation_id]);
         $fTitre = $stF->fetchColumn();
@@ -85,12 +85,13 @@ if ($can_edit) {
             $pdo->prepare("DELETE FROM membres_formes WHERE id = ?")->execute([$existing['id']]);
             addLog($pdo, "Réussites : Retrait formation '$fTitre' pour $pseudo");
         } else {
-            $stmtInfo = $pdo->prepare("SELECT discord_id, role_obtenu FROM membres_formes WHERE pseudo = ? LIMIT 1");
+            // On récupère les infos de base du membre (Top 1 au lieu de LIMIT 1)
+            $stmtInfo = $pdo->prepare("SELECT TOP 1 discord_id, role_obtenu FROM membres_formes WHERE pseudo = ?");
             $stmtInfo->execute([$pseudo]);
             $info = $stmtInfo->fetch();
 
             if ($info) {
-                $pdo->prepare("INSERT INTO membres_formes (discord_id, pseudo, role_obtenu, formation_id, date_reussite, formateur_nom) VALUES (?, ?, ?, ?, CURDATE(), ?)")
+                $pdo->prepare("INSERT INTO membres_formes (discord_id, pseudo, role_obtenu, formation_id, date_reussite, formateur_nom) VALUES (?, ?, ?, ?, CAST(GETDATE() AS DATE), ?)")
                     ->execute([$info['discord_id'], $pseudo, $info['role_obtenu'], $formation_id, $formateur]);
                 
                 addLog($pdo, "Réussites : Validation formation '$fTitre' pour $pseudo");
@@ -114,7 +115,7 @@ if ($can_edit) {
 require 'includes/header.php';
 
 /* ==================================
-    2. RÉCUPÉRATION ET PAGINATION
+    2. RÉCUPÉRATION ET PAGINATION (MS SQL)
 ================================== */
 $active_tab = $_GET['tab'] ?? 'tab-mod';
 $current_page_num = isset($_GET['page']) ? (int)$_GET['page'] : 1;
@@ -125,13 +126,21 @@ $scroll_to = $_GET['scroll'] ?? 0;
 $all_formations = $pdo->query("SELECT * FROM formations ORDER BY id ASC")->fetchAll(PDO::FETCH_ASSOC);
 $role_filter = ($active_tab == 'tab-mod') ? 'Modérateur' : 'Support';
 
+// Compte total
 $countStmt = $pdo->prepare("SELECT COUNT(DISTINCT pseudo) FROM membres_formes WHERE role_obtenu = ?");
 $countStmt->execute([$role_filter]);
 $total_members = $countStmt->fetchColumn();
 $total_pages = ceil($total_members / $limit);
 
-$pseudoStmt = $pdo->prepare("SELECT DISTINCT pseudo, discord_id FROM membres_formes WHERE role_obtenu = ? ORDER BY pseudo ASC LIMIT $limit OFFSET $offset");
-$pseudoStmt->execute([$role_filter]);
+// Pagination SQL Server (OFFSET ... FETCH NEXT ...)
+$pseudoStmt = $pdo->prepare("
+    SELECT DISTINCT pseudo, discord_id 
+    FROM membres_formes 
+    WHERE role_obtenu = ? 
+    ORDER BY pseudo ASC 
+    OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+");
+$pseudoStmt->execute([$role_filter, $offset, $limit]);
 $pseudos_data = $pseudoStmt->fetchAll(PDO::FETCH_ASSOC);
 
 $matrix = [];
@@ -146,7 +155,9 @@ if (!empty($pseudos_data)) {
         $matrix[$p_row['pseudo']] = ['discord_id' => $p_row['discord_id'], 'validations' => []];
     }
     foreach ($rows as $row) {
-        if ($row['formation_id']) { $matrix[$row['pseudo']]['validations'][] = $row['formation_id']; }
+        if ($row['formation_id']) { 
+            $matrix[$row['pseudo']]['validations'][] = $row['formation_id']; 
+        }
     }
 }
 
@@ -333,7 +344,7 @@ foreach ($all_formations as $f) {
         if (scrollTarget > 0) window.scrollTo(0, scrollTarget);
     });
 
-    // Capture de la position du scroll lors de la validation
+    // Capture de la position du scroll
     document.querySelectorAll('.action-form').forEach(form => {
         form.addEventListener('submit', function() {
             let input = this.querySelector('.scroll_input');
