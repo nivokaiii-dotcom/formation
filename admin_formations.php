@@ -1,260 +1,304 @@
 <?php
-require 'config.php';
-require 'includes/header.php';
+ob_start();
+require_once 'config.php';
 
-// Sécurité : Vérification du rôle admin
-if (!isset($_SESSION['user']) || $_SESSION['user']['role'] !== 'admin') {
-    die("Accès refusé.");
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-$message = "";
+/* ==================================
+    FONCTION DE LOGS (SQL Server)
+================================== */
+function addLog($pdo, $action) {
+    $user = 'Anonyme';
+    if (isset($_SESSION['user']['username'])) {
+        $user = $_SESSION['user']['username'];
+    } elseif (isset($_SESSION['username'])) {
+        $user = $_SESSION['username'];
+    }
 
-/* =========================
-   TRAITEMENT (AJOUT/MODIF/SUPPR)
-========================= */
-
-// AJOUT
-if (isset($_POST['add'])) {
     try {
-        $stmt = $pdo->prepare("INSERT INTO formateurs (discord_id, pseudo) VALUES (?, ?)");
-        $stmt->execute([$_POST['discord_id'], $_POST['pseudo']]);
-        header("Location: admin_formateurs.php");
-        exit();
+        // GETDATE() au lieu de NOW()
+        $stmt = $pdo->prepare("INSERT INTO logs (utilisateur, action, date_action) VALUES (?, ?, GETDATE())");
+        $stmt->execute([$user, $action]);
     } catch (PDOException $e) {
-        $message = ($e->getCode() == 23000) ? "Erreur : Cet ID Discord est déjà utilisé." : "Erreur : " . $e->getMessage();
+        error_log("Erreur Log : " . $e->getMessage());
     }
 }
 
-// MODIFICATION
-if (isset($_POST['edit'])) {
-    try {
-        $stmt = $pdo->prepare("UPDATE formateurs SET discord_id = ?, pseudo = ? WHERE id = ?");
-        $stmt->execute([$_POST['discord_id'], $_POST['pseudo'], $_POST['id']]);
-        header("Location: admin_formateurs.php");
-        exit();
-    } catch (PDOException $e) {
-        $message = "Erreur modification : " . $e->getMessage();
+// --- LOGIQUE DE TRAITEMENT ---
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    
+    // 1. Ajouter une nouvelle formation
+    if (isset($_POST['add_formation'])) {
+        $titre = !empty($_POST['titre']) ? $_POST['titre'] : 'Nouveau Module';
+        $stmt = $pdo->prepare("INSERT INTO formations (titre) VALUES (?)");
+        $stmt->execute([$titre]);
+        
+        addLog($pdo, "Modules : Création du module '$titre'");
     }
+
+    // 2. Supprimer une formation
+    if (isset($_POST['delete_formation'])) {
+        $id = (int)$_POST['id'];
+        
+        $st = $pdo->prepare("SELECT titre FROM formations WHERE id = ?");
+        $st->execute([$id]);
+        $oldTitre = $st->fetchColumn();
+
+        $pdo->prepare("DELETE FROM formation_staff WHERE formation_id = ?")->execute([$id]);
+        $pdo->prepare("DELETE FROM formations WHERE id = ?")->execute([$id]);
+        
+        addLog($pdo, "Modules : Suppression définitive du module '$oldTitre' (ID: $id)");
+    }
+
+    // 3. Mise à jour formation
+    if (isset($_POST['update_forma'])) {
+        $lead = !empty($_POST['lead_id']) ? $_POST['lead_id'] : null;
+        $titre = $_POST['titre'];
+        $stmt = $pdo->prepare("UPDATE formations SET titre=?, referent_id=?, doc_link_2026=?, qst_link=? WHERE id=?");
+        $stmt->execute([$titre, $lead, $_POST['doc'], $_POST['qst'], $_POST['id']]);
+        
+        addLog($pdo, "Modules : Mise à jour des informations du module '$titre'");
+    }
+
+    // 4. Ajout Staff (Version SQL Server sans INSERT IGNORE)
+    if (isset($_POST['add_staff'])) {
+        $f_id = $_POST['f_id'];
+        $staff_id = $_POST['staff_id'];
+        
+        // Emulation de INSERT IGNORE pour SQL Server
+        $sqlAdd = "INSERT INTO formation_staff (formation_id, formateur_id) 
+                   SELECT ?, ?
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM formation_staff 
+                       WHERE formation_id = ? AND formateur_id = ?
+                   )";
+        $stmt = $pdo->prepare($sqlAdd);
+        $stmt->execute([$f_id, $staff_id, $f_id, $staff_id]);
+        
+        $stF = $pdo->prepare("SELECT titre FROM formations WHERE id = ?");
+        $stF->execute([$f_id]);
+        $fTitre = $stF->fetchColumn();
+        
+        $stS = $pdo->prepare("SELECT pseudo FROM formateurs WHERE id = ?");
+        $stS->execute([$staff_id]);
+        $sPseudo = $stS->fetchColumn();
+
+        addLog($pdo, "Modules : Ajout du formateur '$sPseudo' au module '$fTitre'");
+    }
+    
+    header("Location: " . $_SERVER['PHP_SELF']);
+    exit;
 }
 
-// SUPPRESSION
-if (isset($_POST['delete'])) {
-    $stmt = $pdo->prepare("DELETE FROM formateurs WHERE id = ?");
-    $stmt->execute([$_POST['id']]);
-    header("Location: admin_formateurs.php");
-    exit();
+// 5. Retrait Staff (via GET)
+if (isset($_GET['remove_staff'], $_GET['f_id'], $_GET['s_id'])) {
+    $f_id = (int)$_GET['f_id'];
+    $s_id = (int)$_GET['s_id'];
+
+    $stF = $pdo->prepare("SELECT titre FROM formations WHERE id = ?");
+    $stF->execute([$f_id]);
+    $fTitre = $stF->fetchColumn();
+    
+    $stS = $pdo->prepare("SELECT pseudo FROM formateurs WHERE id = ?");
+    $stS->execute([$s_id]);
+    $sPseudo = $stS->fetchColumn();
+
+    $stmt = $pdo->prepare("DELETE FROM formation_staff WHERE formation_id = ? AND formateur_id = ?");
+    $stmt->execute([$f_id, $s_id]);
+    
+    addLog($pdo, "Modules : Retrait du formateur '$sPseudo' du module '$fTitre'");
+    
+    header("Location: " . $_SERVER['PHP_SELF']);
+    exit;
 }
 
-// RÉCUPÉRATION DES DONNÉES
-$query = "SELECT f.*, u.avatar 
-          FROM formateurs f 
-          LEFT JOIN users u ON f.discord_id = u.discord_id 
-          ORDER BY f.id DESC";
-$formateurs = $pdo->query($query)->fetchAll(PDO::FETCH_ASSOC);
-$totalFormateurs = count($formateurs);
+// --- RÉCUPÉRATION DES DONNÉES (Version SQL Server) ---
+$formateurs = $pdo->query("SELECT id, pseudo FROM formateurs ORDER BY pseudo ASC")->fetchAll();
+
+/** * Utilisation de STRING_AGG au lieu de GROUP_CONCAT. 
+ * Note : On CAST les IDs en VARCHAR pour pouvoir concaténer avec le pseudo.
+ */
+$sql = "SELECT f.*, 
+        STRING_AGG(CAST(s.id AS VARCHAR) + ':' + s.pseudo, '|') WITHIN GROUP (ORDER BY s.pseudo ASC) as staff_data
+        FROM formations f
+        LEFT JOIN formation_staff fs ON f.id = fs.formation_id
+        LEFT JOIN formateurs s ON fs.formateur_id = s.id
+        GROUP BY f.id, f.titre, f.referent_id, f.doc_link_2026, f.qst_link 
+        ORDER BY f.titre ASC";
+        
+$formations = $pdo->query($sql)->fetchAll();
+
+require_once 'includes/header.php';
 ?>
 
 <style>
-    /* Intégration du thème dynamique */
-    .admin-card { background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 12px; }
-    .dynamic-text { color: var(--text-main); }
-    .dynamic-subtext { color: var(--text-main); opacity: 0.6; }
-    
-    .table thead { background: var(--table-header); }
-    .table thead th { 
-        color: var(--text-main); 
-        text-transform: uppercase; 
-        font-size: 0.75rem; 
-        letter-spacing: 0.5px;
-        border-bottom: 1px solid var(--border-color);
+    html, body { height: 100%; margin: 0; }
+    body { display: flex; flex-direction: column; min-height: 100vh; background-color: var(--bs-body-bg); }
+    .main-content { flex: 1 0 auto; }
+    .card { border-radius: 15px; overflow: hidden; background: var(--bs-card-bg); border: 1px solid var(--bs-border-color); }
+    .btn-delete-module { 
+        background: rgba(220, 53, 69, 0.1); 
+        color: #dc3545; 
+        border: 1px solid rgba(220, 53, 69, 0.2);
+        transition: 0.3s;
     }
-    .table td { color: var(--text-main); border-bottom: 1px solid var(--border-color); }
-    
-    .profile-img { object-fit: cover; transition: all 0.2s ease; border: 2px solid var(--border-color); }
-    .profile-img:hover { transform: scale(1.1); }
-    
-    .custom-input { 
-        background-color: var(--table-header) !important; 
-        border: 1px solid var(--border-color) !important; 
-        color: var(--text-main) !important; 
-    }
-    .custom-input::placeholder { color: var(--text-main); opacity: 0.4; }
-    
-    code { font-size: 0.9rem; background: rgba(120, 120, 120, 0.1); color: var(--primary-accent); padding: 2px 6px; border-radius: 4px; }
-    
-    /* Modals Dark Mode */
-    .modal-content { background-color: var(--card-bg); color: var(--text-main); border: 1px solid var(--border-color); }
-    .modal-header { border-bottom: 1px solid var(--border-color); }
-    .modal-footer { border-top: 1px solid var(--border-color); }
+    .btn-delete-module:hover { background: #dc3545; color: white; }
+    .badge-staff { background: var(--bs-tertiary-bg); color: var(--bs-body-color); border: 1px solid var(--bs-border-color); }
 </style>
 
-<div class="container mt-4">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <div>
-            <h2 class="mb-0 dynamic-text">👥 Gestion des Formateurs</h2>
-            <p class="dynamic-subtext">Total : <span id="memberCount" class="fw-bold text-primary"><?= $totalFormateurs ?></span> formateur(s)</p>
+<div class="main-content">
+    <div class="container py-4">
+        
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <div>
+                <h2 class="fw-bold m-0">⚙️ Configuration des Modules</h2>
+                <p class="text-muted small">Gérez les programmes, liens et formateurs rattachés</p>
+            </div>
+            <button class="btn btn-primary rounded-pill px-4 shadow-sm" data-bs-toggle="modal" data-bs-target="#modalAddForma">
+                <i class="bi bi-plus-circle me-2"></i>Nouveau Module
+            </button>
         </div>
-        <button class="btn btn-success shadow-sm px-4" data-bs-toggle="modal" data-bs-target="#addModal">
-            <i class="bi bi-plus-lg me-1"></i> Ajouter un formateur
-        </button>
-    </div>
 
-    <?php if ($message): ?>
-        <div class="alert alert-danger alert-dismissible fade show" role="alert">
-            <?= $message; ?>
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>
-    <?php endif; ?>
+        <?php foreach ($formations as $f): ?>
+        <div class="card mb-4 shadow-sm">
+            <div class="card-header bg-transparent border-0 pt-3 d-flex justify-content-between align-items-center">
+                <span class="badge bg-dark">ID #<?= $f['id'] ?></span>
+                <form method="POST" onsubmit="return confirm('⚠️ Action irréversible : Supprimer ce module ?')">
+                    <input type="hidden" name="id" value="<?= $f['id'] ?>">
+                    <button type="submit" name="delete_formation" class="btn btn-sm btn-delete-module">
+                        <i class="bi bi-trash3 me-1"></i> Supprimer
+                    </button>
+                </form>
+            </div>
+            <div class="card-body">
+                <form method="POST" class="row g-3">
+                    <input type="hidden" name="id" value="<?= (int)$f['id'] ?>">
+                    
+                    <div class="col-md-3">
+                        <label class="small fw-bold mb-1">Nom du Module</label>
+                        <input type="text" name="titre" class="form-control" value="<?= htmlspecialchars($f['titre'] ?? '') ?>" required>
+                    </div>
+                    
+                    <div class="col-md-3">
+                        <label class="small fw-bold mb-1 text-primary">Lead Référent</label>
+                        <select name="lead_id" class="form-select border-primary">
+                            <option value="">-- Aucun --</option>
+                            <?php foreach($formateurs as $s): ?>
+                                <option value="<?= $s['id'] ?>" <?= ($f['referent_id'] == $s['id']) ? 'selected' : '' ?>>
+                                    <?= htmlspecialchars($s['pseudo']) ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
 
-    <div class="row mb-4">
-        <div class="col-md-12">
-            <div class="input-group shadow-sm">
-                <span class="input-group-text custom-input">🔍</span>
-                <input type="text" id="searchInput" class="form-control custom-input ps-2"
-                    placeholder="Rechercher un pseudo ou un ID Discord...">
+                    <div class="col-md-3">
+                        <label class="small fw-bold mb-1">Documentation 2026</label>
+                        <input type="url" name="doc" class="form-control" value="<?= htmlspecialchars($f['doc_link_2026'] ?? '') ?>" placeholder="https://...">
+                    </div>
+
+                    <div class="col-md-3">
+                        <label class="small fw-bold mb-1 text-danger">Lien Questionnaire</label>
+                        <input type="url" name="qst" class="form-control" value="<?= htmlspecialchars($f['qst_link'] ?? '') ?>" placeholder="https://...">
+                    </div>
+
+                    <div class="col-12 text-end">
+                        <button type="submit" name="update_forma" class="btn btn-sm btn-success px-4 rounded-pill">
+                            <i class="bi bi-save me-1"></i> Enregistrer les modifications
+                        </button>
+                    </div>
+                </form>
+
+                <hr class="my-4">
+                
+                <div class="row align-items-center">
+                    <div class="col-md-7">
+                        <h6 class="fw-bold mb-3 small text-uppercase text-muted">Équipe de formation</h6>
+                        <div class="d-flex flex-wrap gap-2">
+                            <?php 
+                            if (!empty($f['staff_data'])):
+                                $staff_members = explode('|', $f['staff_data']);
+                                foreach($staff_members as $member): 
+                                    list($s_id, $s_pseudo) = explode(':', $member);
+                            ?>
+                                <span class="badge badge-staff p-2 d-flex align-items-center rounded-pill">
+                                    <span class="me-2"><?= htmlspecialchars($s_pseudo) ?></span>
+                                    <a href="?remove_staff=1&f_id=<?= $f['id'] ?>&s_id=<?= $s_id ?>" 
+                                       class="text-danger lh-1 remove-staff-link" 
+                                       onclick="return confirm('Retirer <?= htmlspecialchars($s_pseudo) ?> de ce module ?')">
+                                         <i class="bi bi-x-circle-fill"></i>
+                                    </a>
+                                </span>
+                            <?php 
+                                endforeach; 
+                            else:
+                                echo '<span class="text-muted small">Aucun formateur assigné.</span>';
+                            endif;
+                            ?>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-5 mt-3 mt-md-0">
+                        <form method="POST" class="input-group input-group-sm">
+                            <input type="hidden" name="f_id" value="<?= $f['id'] ?>">
+                            <select name="staff_id" class="form-select" required>
+                                <option value="" disabled selected>Ajouter un formateur...</option>
+                                <?php foreach($formateurs as $s): ?>
+                                    <option value="<?= $s['id'] ?>"><?= htmlspecialchars($s['pseudo']) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <button type="submit" name="add_staff" class="btn btn-primary">
+                                <i class="bi bi-plus-lg"></i>
+                            </button>
+                        </form>
+                    </div>
+                </div>
             </div>
         </div>
-    </div>
-
-    <div class="admin-card shadow-sm overflow-hidden">
-        <div class="table-responsive">
-            <table class="table table-hover mb-0 align-middle">
-                <thead>
-                    <tr>
-                        <th class="ps-3" style="width: 80px;">Avatar</th>
-                        <th>Pseudo</th>
-                        <th>ID Discord</th>
-                        <th class="text-end pe-3">Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="formateurTableBody">
-                    <?php foreach ($formateurs as $f): 
-                        $pp = !empty($f['avatar']) ? $f['avatar'] : "https://unavatar.io/discord/" . $f['discord_id'] . "?fallback=https://ui-avatars.com/api/?name=" . urlencode($f['pseudo']) . "&background=random";
-                    ?>
-                        <tr class="formateur-row">
-                            <td class="ps-3">
-                                <img src="<?= $pp ?>" alt="Avatar" class="rounded-circle profile-img" width="45" height="45">
-                            </td>
-                            <td>
-                                <span class="fw-bold pseudo-name dynamic-text"><?= htmlspecialchars($f['pseudo']); ?></span>
-                            </td>
-                            <td class="discord-id">
-                                <code><?= htmlspecialchars($f['discord_id']); ?></code>
-                            </td>
-                            <td class="text-end pe-3">
-                                <button class="btn btn-sm btn-outline-warning me-1" data-bs-toggle="modal" data-bs-target="#editModal<?= $f['id']; ?>">Modifier</button>
-                                <button class="btn btn-sm btn-outline-danger" data-bs-toggle="modal" data-bs-target="#deleteModal<?= $f['id']; ?>">Retirer</button>
-                            </td>
-                        </tr>
-
-                        <div class="modal fade" id="editModal<?= $f['id']; ?>" tabindex="-1" aria-hidden="true">
-                            <div class="modal-dialog modal-dialog-centered">
-                                <div class="modal-content">
-                                    <form method="POST">
-                                        <div class="modal-header">
-                                            <h5 class="modal-title">Modifier <?= htmlspecialchars($f['pseudo']); ?></h5>
-                                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-                                        </div>
-                                        <div class="modal-body">
-                                            <input type="hidden" name="id" value="<?= $f['id']; ?>">
-                                            <div class="mb-3">
-                                                <label class="form-label dynamic-text">ID Discord</label>
-                                                <input type="text" name="discord_id" class="form-control custom-input" value="<?= htmlspecialchars($f['discord_id']); ?>" required>
-                                            </div>
-                                            <div class="mb-3">
-                                                <label class="form-label dynamic-text">Pseudo</label>
-                                                <input type="text" name="pseudo" class="form-control custom-input" value="<?= htmlspecialchars($f['pseudo']); ?>" required>
-                                            </div>
-                                        </div>
-                                        <div class="modal-footer">
-                                            <button type="button" class="btn btn-link dynamic-subtext text-decoration-none" data-bs-dismiss="modal">Annuler</button>
-                                            <button type="submit" name="edit" class="btn btn-warning px-4">Enregistrer</button>
-                                        </div>
-                                    </form>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="modal fade" id="deleteModal<?= $f['id']; ?>" tabindex="-1" aria-hidden="true">
-                            <div class="modal-dialog modal-dialog-centered">
-                                <div class="modal-content">
-                                    <form method="POST">
-                                        <div class="modal-header border-0"><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
-                                        <div class="modal-body text-center py-4">
-                                            <input type="hidden" name="id" value="<?= $f['id']; ?>">
-                                            <i class="bi bi-exclamation-octagon text-danger" style="font-size: 3.5rem;"></i>
-                                            <h4 class="mt-3 dynamic-text">Confirmer le retrait ?</h4>
-                                            <p class="dynamic-subtext">Voulez-vous vraiment retirer <strong><?= htmlspecialchars($f['pseudo']); ?></strong> de la liste des formateurs ?</p>
-                                        </div>
-                                        <div class="modal-footer border-0 justify-content-center">
-                                            <button type="button" class="btn btn-secondary px-4" data-bs-dismiss="modal">Annuler</button>
-                                            <button type="submit" name="delete" class="btn btn-danger px-4">Supprimer</button>
-                                        </div>
-                                    </form>
-                                </div>
-                            </div>
-                        </div>
-
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
-        </div>
-        <div id="noResults" class="text-center py-5 d-none">
-            <p class="dynamic-subtext mb-0">Aucun formateur ne correspond à votre recherche.</p>
-        </div>
+        <?php endforeach; ?>
     </div>
 </div>
 
-<div class="modal fade" id="addModal" tabindex="-1" aria-hidden="true">
+<div class="modal fade" id="modalAddForma" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content border-0 shadow">
-            <form method="POST">
-                <div class="modal-header bg-success text-white">
-                    <h5 class="modal-title">Nouveau Formateur</h5>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <div class="mb-3">
-                        <label class="form-label dynamic-text">ID Discord</label>
-                        <input type="text" name="discord_id" class="form-control custom-input" placeholder="Ex: 882717172575653928" required>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label dynamic-text">Pseudo</label>
-                        <input type="text" name="pseudo" class="form-control custom-input" placeholder="Nom du formateur" required>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-link dynamic-subtext text-decoration-none" data-bs-dismiss="modal">Fermer</button>
-                    <button type="submit" name="add" class="btn btn-success px-4">Ajouter</button>
-                </div>
-            </form>
-        </div>
+        <form method="POST" class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold">Nouveau Module</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <label class="small fw-bold mb-2">Titre de la formation</label>
+                <input type="text" name="titre" class="form-control" placeholder="ex: Procédures Modération" required>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">Annuler</button>
+                <button type="submit" name="add_formation" class="btn btn-primary">Créer</button>
+            </div>
+        </form>
     </div>
 </div>
 
 <script>
-    // Filtre de recherche temps réel
-    document.getElementById('searchInput').addEventListener('keyup', function () {
-        let filter = this.value.toLowerCase();
-        let rows = document.querySelectorAll('.formateur-row');
-        let visibleCount = 0;
-        let noResults = document.getElementById('noResults');
+    document.addEventListener("DOMContentLoaded", function() {
+        const scrollpos = localStorage.getItem('scrollpos');
+        if (scrollpos) window.scrollTo(0, scrollpos);
 
-        rows.forEach(row => {
-            let pseudo = row.querySelector('.pseudo-name').textContent.toLowerCase();
-            let discordId = row.querySelector('.discord-id').textContent.toLowerCase();
-
-            if (pseudo.includes(filter) || discordId.includes(filter)) {
-                row.style.display = "";
-                visibleCount++;
-            } else {
-                row.style.display = "none";
-            }
+        document.querySelectorAll('form').forEach(form => {
+            form.addEventListener('submit', () => {
+                localStorage.setItem('scrollpos', window.scrollY);
+            });
         });
 
-        document.getElementById('memberCount').textContent = visibleCount;
-        noResults.classList.toggle('d-none', visibleCount > 0);
+        document.querySelectorAll('.remove-staff-link').forEach(link => {
+            link.addEventListener('click', () => {
+                localStorage.setItem('scrollpos', window.scrollY);
+            });
+        });
     });
 </script>
 
-<?php require 'includes/footer.php'; ?>
+<?php 
+require_once 'includes/footer.php'; 
+ob_end_flush();
+?>
