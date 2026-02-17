@@ -12,32 +12,37 @@ if (!isset($_SESSION['user'])) {
 }
 
 /* ============================================================
-    SYNCHRONISATION ET VÉRIFICATION DU RÔLE
+    SYNCHRONISATION ET VÉRIFICATION DU RÔLE (SQL SERVER)
    ============================================================ */
-// On récupère le rôle actuel directement en BDD
-$stmtCheck = $pdo->prepare("SELECT role FROM users WHERE discord_id = ?");
-$stmtCheck->execute([$_SESSION['user']['discord_id']]);
-$userFreshData = $stmtCheck->fetch(PDO::FETCH_ASSOC);
+try {
+    // On récupère le rôle actuel directement en BDD pour éviter les sessions périmées
+    $stmtCheck = $pdo->prepare("SELECT role FROM users WHERE discord_id = ?");
+    $stmtCheck->execute([$_SESSION['user']['discord_id']]);
+    $userFreshData = $stmtCheck->fetch(PDO::FETCH_ASSOC);
 
-// Sécurité : Si l'utilisateur n'existe plus ou si son rôle est NULL/vide
-if (!$userFreshData || empty($userFreshData['role'])) {
-    session_destroy(); // On détruit la session
-    header("Location: login.php?error=access_denied");
-    exit();
-}
+    // Sécurité : Si l'utilisateur n'existe plus ou si son rôle est NULL/vide
+    if (!$userFreshData || empty($userFreshData['role'])) {
+        session_destroy();
+        header("Location: login.php?error=access_denied");
+        exit();
+    }
 
-// Mise à jour de la session si le rôle a changé en BDD
-if ($_SESSION['user']['role'] !== $userFreshData['role']) {
-    $_SESSION['user']['role'] = $userFreshData['role'];
+    // Mise à jour de la session si le rôle a changé en BDD
+    if ($_SESSION['user']['role'] !== $userFreshData['role']) {
+        $_SESSION['user']['role'] = $userFreshData['role'];
+    }
+} catch (PDOException $e) {
+    // En cas d'erreur SQL, on évite de bloquer tout le site mais on log
+    error_log("Erreur synchro rôle : " . $e->getMessage());
 }
 
 $role = $_SESSION['user']['role'];
-$discord_id = htmlspecialchars($_SESSION['user']['discord_id'] ?? 'Staff');
-$username = htmlspecialchars($_SESSION['user']['username'] ?? 'Staff');
-$avatar_user = $_SESSION['user']['avatar'] ?? 'https://ui-avatars.com/api/?name='.$discord_id.'&background=random';
+$discord_id = htmlspecialchars($_SESSION['user']['discord_id'] ?? 'N/A');
+$username = htmlspecialchars($_SESSION['user']['username'] ?? 'Utilisateur');
+$avatar_user = $_SESSION['user']['avatar'] ?? 'https://ui-avatars.com/api/?name='.urlencode($username).'&background=random';
 $current_page = basename($_SERVER['PHP_SELF']);
 
-// --- CONFIGURATION LOGO LOCAL ---
+// Configuration Logo
 $logo_path = "includes/favicon.ico"; 
 ?>
 <!DOCTYPE html>
@@ -129,7 +134,6 @@ $logo_path = "includes/favicon.ico";
                         <i class="bi bi-calendar-plus me-1"></i> Sessions
                     </a>
                 </li>
-
                 <li class="nav-item">
                     <a class="nav-link <?= ($current_page == 'admin_reussites.php') ? 'active' : '' ?>" href="admin_reussites.php">
                         <i class="bi bi-person-check me-1"></i> Réussites
