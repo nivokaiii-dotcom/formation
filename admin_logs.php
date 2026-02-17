@@ -14,17 +14,26 @@ if (!isset($_SESSION['user']) || $_SESSION['user']['role'] !== 'admin') {
 
 // Action : Vider les logs
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['clear_logs'])) {
-    // On vide la table
-    $pdo->query("TRUNCATE TABLE logs");
-    // On log l'action de nettoyage
-    insertLog($pdo, "⚠️ NETTOYAGE : L'historique des logs a été intégralement vidé.");
-    
-    header("Location: admin_logs.php?success=cleared");
-    exit();
+    try {
+        // SQL Server : Suppression des données
+        $pdo->query("DELETE FROM logs");
+        
+        // Optionnel : Réinitialiser l'auto-incrément (Identity) à 0
+        // $pdo->query("DBCC CHECKIDENT ('logs', RESEED, 0)");
+
+        // On log l'action de nettoyage (La fonction insertLog utilise GETDATE() dans ton config.php)
+        insertLog($pdo, "⚠️ NETTOYAGE : L'historique des logs a été intégralement vidé.");
+        
+        header("Location: admin_logs.php?success=cleared");
+        exit();
+    } catch (PDOException $e) {
+        error_log("Erreur lors du vidage des logs : " . $e->getMessage());
+    }
 }
 
-// Récupération des logs avec limite
-$logs = $pdo->query("SELECT * FROM logs ORDER BY date_action DESC LIMIT 500")->fetchAll(PDO::FETCH_ASSOC);
+// Récupération des logs avec limite (Syntaxe SQL Server : SELECT TOP X)
+$query = "SELECT TOP 500 * FROM logs ORDER BY date_action DESC";
+$logs = $pdo->query($query)->fetchAll(PDO::FETCH_ASSOC);
 
 require_once 'includes/header.php';
 ?>
@@ -69,7 +78,6 @@ require_once 'includes/header.php';
     
     .timestamp { font-family: 'Monaco', 'Consolas', monospace; opacity: 0.7; }
 
-    /* Animation au survol */
     .table-hover tbody tr:hover {
         background-color: rgba(13, 110, 253, 0.03) !important;
         transition: 0.2s;
@@ -122,21 +130,19 @@ require_once 'includes/header.php';
                             <th class="ps-4 py-3">Horodatage</th>
                             <th class="py-3">Utilisateur</th>
                             <th class="py-3">Action effectuée</th>
-                            <th class="text-end pe-4 py-3">Réussite</th>
+                            <th class="text-end pe-4 py-3">Statut</th>
                         </tr>
                     </thead>
                     <tbody>
                         <?php if (empty($logs)): ?>
                             <tr>
                                 <td colspan="4" class="text-center py-5">
-                                    <img src="https://cdn-icons-png.flaticon.com/512/7486/7486744.png" style="width: 64px; opacity: 0.3;" alt="empty">
                                     <p class="mt-3 text-muted">Aucune activité enregistrée dans la base de données.</p>
                                 </td>
                             </tr>
                         <?php endif; ?>
 
                         <?php foreach ($logs as $l): 
-                            // Analyse de l'action pour icône dynamique
                             $icon = "bi-info-circle";
                             if(stripos($l['action'], 'Suppression') !== false) $icon = "bi-exclamation-triangle text-danger";
                             if(stripos($l['action'], 'Connexion') !== false) $icon = "bi-door-open text-success";
@@ -150,16 +156,16 @@ require_once 'includes/header.php';
                                 <td>
                                     <span class="badge badge-user rounded-pill px-3 py-2">
                                         <i class="bi bi-person me-1"></i> 
-                                        <?= htmlspecialchars($l['utilisateur']) ?>
+                                        <?= htmlspecialchars($l['utilisateur'] ?? 'Système') ?>
                                     </span>
                                 </td>
                                 <td class="action-text">
                                     <i class="bi <?= $icon ?> me-2"></i>
-                                    <?= htmlspecialchars($l['action']) ?>
+                                    <?= htmlspecialchars($l['action'] ?? '') ?>
                                 </td>
                                 <td class="text-end pe-4">
                                     <span class="badge bg-success-subtle text-success small border border-success-subtle">
-                                        <i class="bi bi-check-lg"></i> SUCCESS
+                                        <i class="bi bi-check-lg"></i> OK
                                     </span>
                                 </td>
                             </tr>
@@ -170,13 +176,12 @@ require_once 'includes/header.php';
         </div>
         
         <div class="mt-3 text-center">
-            <p class="text-muted small">Fin de l'historique récent.</p>
+            <p class="text-muted small">Affichage des 500 derniers événements.</p>
         </div>
     </div>
 </div>
 
 <script>
-    // Script de filtrage dynamique
     document.getElementById('logSearch').addEventListener('keyup', function() {
         let filter = this.value.toLowerCase();
         let rows = document.querySelectorAll('.log-row');
