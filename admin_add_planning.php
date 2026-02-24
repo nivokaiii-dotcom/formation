@@ -9,7 +9,6 @@ define('DISCORD_WEBHOOK_URL', 'https://discord.com/api/webhooks/1471797709320224
 
 // Fonction pour ajouter un log dans la table logs
 function addLog($pdo, $action) {
-    // On essaie de récupérer le pseudo dans l'ordre de priorité des clés de session courantes
     $user = 'Anonyme';
     if (isset($_SESSION['user']['username'])) {
         $user = $_SESSION['user']['username'];
@@ -22,10 +21,10 @@ function addLog($pdo, $action) {
     }
 
     try {
-        $stmt = $pdo->prepare("INSERT INTO logs (utilisateur, action, date_action) VALUES (?, ?, NOW())");
+        // SQL Server utilise GETDATE() au lieu de NOW()
+        $stmt = $pdo->prepare("INSERT INTO logs (utilisateur, action, date_action) VALUES (?, ?, GETDATE())");
         $stmt->execute([$user, $action]);
     } catch (PDOException $e) {
-        // Optionnel : logger l'erreur SQL dans un fichier pour le debug
         error_log("Erreur Log : " . $e->getMessage());
     }
 }
@@ -36,8 +35,11 @@ function syncDiscordPlanning($pdo) {
     $monday = $dateObj->format('Y-m-d');
     $sunday = (clone $dateObj)->modify('+6 days')->format('Y-m-d');
 
+    // SQL Server : On convertit l'heure pour s'assurer du format HH:mm
     $stmt = $pdo->prepare("
-        SELECT p.date, p.heure, p.formateur, f.titre 
+        SELECT p.date, 
+               CONVERT(VARCHAR(5), p.heure, 108) as heure, 
+               p.formateur, f.titre 
         FROM planning p 
         JOIN formations f ON p.formation_id = f.id 
         WHERE p.date BETWEEN ? AND ? 
@@ -47,7 +49,10 @@ function syncDiscordPlanning($pdo) {
     $sessions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     $calendar = [];
-    foreach ($sessions as $s) { $calendar[$s['date']][] = $s; }
+    foreach ($sessions as $s) { 
+        $d = is_a($s['date'], 'DateTime') ? $s['date']->format('Y-m-d') : $s['date'];
+        $calendar[$d][] = $s; 
+    }
 
     $joursFr = ['Monday'=>'Lundi','Tuesday'=>'Mardi','Wednesday'=>'Mercredi','Thursday'=>'Jeudi','Friday'=>'Vendredi','Saturday'=>'Samedi','Sunday'=>'Dimanche'];
 
@@ -60,7 +65,7 @@ function syncDiscordPlanning($pdo) {
         $text = "";
         if (isset($calendar[$dateStr])) {
             foreach ($calendar[$dateStr] as $sess) {
-                $text .= "🕒 `".substr($sess['heure'], 0, 5)."` **{$sess['titre']}**\n└ 👤 _{$sess['formateur']}_\n";
+                $text .= "🕒 `".$sess['heure']."` **{$sess['titre']}**\n└ 👤 _{$sess['formateur']}_\n";
             }
         } else {
             $text = "*Aucune session prévue*";
@@ -124,6 +129,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmtF->execute([$form_id]);
         $formation_nom = $stmtF->fetchColumn();
 
+        // SQL Server gère les comparaisons d'heures. On vérifie le conflit (30 min)
         $stmt = $pdo->prepare("SELECT heure FROM planning WHERE date = ? AND id != ?");
         $stmt->execute([$date, $id_existant]);
         $existing_sessions = $stmt->fetchAll();
@@ -131,7 +137,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $conflict = false;
         $new_time = strtotime($heure);
         foreach ($existing_sessions as $sess) {
-            $sess_time = strtotime($sess['heure']);
+            $time_val = is_a($sess['heure'], 'DateTime') ? $sess['heure']->format('H:i:s') : $sess['heure'];
+            $sess_time = strtotime($time_val);
             $diff = abs($new_time - $sess_time) / 60;
             if ($diff < 30) { $conflict = true; break; }
         }
@@ -172,7 +179,8 @@ $formations = $pdo->query("SELECT * FROM formations ORDER BY titre ASC")->fetchA
 $formateurs_list = $pdo->query("SELECT f.pseudo FROM formateurs f ORDER BY f.pseudo ASC")->fetchAll(PDO::FETCH_ASSOC);
 
 $stmt = $pdo->prepare("
-    SELECT p.*, f.titre AS formation_titre, u.avatar
+    SELECT p.id, p.date, p.heure, p.formation_id, p.formateur, 
+           f.titre AS formation_titre, u.avatar
     FROM planning p
     LEFT JOIN formations f ON f.id = p.formation_id
     LEFT JOIN formateurs fm ON p.formateur = fm.pseudo
@@ -238,14 +246,17 @@ unset($_SESSION['flash']);
                         <?php else: ?>
                             <?php foreach ($planning as $p): 
                                 $avatarUrl = !empty($p['avatar']) ? $p['avatar'] : 'https://ui-avatars.com/api/?name='.urlencode($p['formateur']??'').'&background=random';
+                                // Formattage Date/Heure pour SQL Server (qui renvoie parfois des objets DateTime)
+                                $dateVal = is_a($p['date'], 'DateTime') ? $p['date']->format('Y-m-d') : $p['date'];
+                                $heureVal = is_a($p['heure'], 'DateTime') ? $p['heure']->format('H:i') : substr($p['heure'], 0, 5);
                             ?>
                             <tr>
                                 <td><span class="fw-bold"><?= htmlspecialchars($p['formation_titre'] ?? 'N/A') ?></span></td>
                                 <td>
                                     <div class="d-flex align-items-center">
                                         <i class="bi bi-calendar3 me-2 text-primary"></i>
-                                        <?= date('d/m/Y', strtotime($p['date'])) ?>
-                                        <span class="badge bg-primary-subtle text-primary ms-2"><?= substr($p['heure'], 0, 5) ?></span>
+                                        <?= date('d/m/Y', strtotime($dateVal)) ?>
+                                        <span class="badge bg-primary-subtle text-primary ms-2"><?= $heureVal ?></span>
                                     </div>
                                 </td>
                                 <td>
@@ -254,11 +265,11 @@ unset($_SESSION['flash']);
                                 </td>
                                 <td class="text-end">
                                     <button class="btn btn-outline-warning btn-sm border-0" 
-                                        onclick='openEditModal(<?= $p['id'] ?>, <?= $p['formation_id'] ?>, "<?= $p['date'] ?>", "<?= $p['heure'] ?>", "<?= htmlspecialchars($p['formateur'], ENT_QUOTES) ?>")'>
+                                        onclick='openEditModal(<?= $p['id'] ?>, <?= $p['formation_id'] ?>, "<?= $dateVal ?>", "<?= $heureVal ?>", "<?= htmlspecialchars($p['formateur'], ENT_QUOTES) ?>")'>
                                         <i class="bi bi-pencil-square"></i>
                                     </button>
                                     <button class="btn btn-outline-danger btn-sm border-0" 
-                                        onclick='openDeleteModal(<?= $p['id'] ?>, "<?= htmlspecialchars($p['formation_titre'], ENT_QUOTES) ?>", "<?= $p['date'] ?>")'>
+                                        onclick='openDeleteModal(<?= $p['id'] ?>, "<?= htmlspecialchars($p['formation_titre'], ENT_QUOTES) ?>", "<?= $dateVal ?>")'>
                                         <i class="bi bi-trash3"></i>
                                     </button>
                                 </td>

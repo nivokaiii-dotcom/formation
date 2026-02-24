@@ -18,7 +18,8 @@ function addLog($pdo, $action) {
     }
 
     try {
-        $stmt = $pdo->prepare("INSERT INTO logs (utilisateur, action, date_action) VALUES (?, ?, NOW())");
+        // SQL Server utilise GETDATE() au lieu de NOW()
+        $stmt = $pdo->prepare("INSERT INTO logs (utilisateur, action, date_action) VALUES (?, ?, GETDATE())");
         $stmt->execute([$user, $action]);
     } catch (PDOException $e) {
         error_log("Erreur Log : " . $e->getMessage());
@@ -45,7 +46,8 @@ if ($can_edit) {
         $discord_id = trim($_POST['new_discord_id']);
         $role = $_POST['new_role'];
         if (!empty($pseudo) && !empty($discord_id)) {
-            $stmt = $pdo->prepare("INSERT INTO membres_formes (discord_id, pseudo, role_obtenu, formation_id, date_reussite) VALUES (?, ?, ?, NULL, CURDATE())");
+            // SQL Server : CAST(GETDATE() AS DATE) au lieu de CURDATE()
+            $stmt = $pdo->prepare("INSERT INTO membres_formes (discord_id, pseudo, role_obtenu, formation_id, date_reussite) VALUES (?, ?, ?, NULL, CAST(GETDATE() AS DATE))");
             $stmt->execute([$discord_id, $pseudo, $role]);
             addLog($pdo, "Réussites : Création du profil staff pour '$pseudo' ($role)");
         }
@@ -79,12 +81,13 @@ if ($can_edit) {
             $pdo->prepare("DELETE FROM membres_formes WHERE id = ?")->execute([$existing['id']]);
             addLog($pdo, "Réussites : Retrait formation '$fTitre' pour $pseudo");
         } else {
-            $stmtInfo = $pdo->prepare("SELECT discord_id, role_obtenu FROM membres_formes WHERE pseudo = ? LIMIT 1");
+            // SQL Server : TOP 1 au lieu de LIMIT 1
+            $stmtInfo = $pdo->prepare("SELECT TOP 1 discord_id, role_obtenu FROM membres_formes WHERE pseudo = ?");
             $stmtInfo->execute([$pseudo]);
             $info = $stmtInfo->fetch();
 
             if ($info) {
-                $pdo->prepare("INSERT INTO membres_formes (discord_id, pseudo, role_obtenu, formation_id, date_reussite, formateur_nom) VALUES (?, ?, ?, ?, CURDATE(), ?)")
+                $pdo->prepare("INSERT INTO membres_formes (discord_id, pseudo, role_obtenu, formation_id, date_reussite, formateur_nom) VALUES (?, ?, ?, ?, CAST(GETDATE() AS DATE), ?)")
                     ->execute([$info['discord_id'], $pseudo, $info['role_obtenu'], $formation_id, $formateur]);
                 addLog($pdo, "Réussites : Validation formation '$fTitre' pour $pseudo");
             }
@@ -117,42 +120,42 @@ $offset = ($current_page_num - 1) * $limit;
 $all_formations = $pdo->query("SELECT * FROM formations ORDER BY id ASC")->fetchAll(PDO::FETCH_ASSOC);
 $role_filter = ($active_tab == 'tab-mod') ? 'Modérateur' : 'Support';
 
-// Construction de la requête SQL Dynamique
-$sql_count = "SELECT COUNT(DISTINCT pseudo) FROM membres_formes WHERE 1=1";
-$sql_users = "SELECT DISTINCT pseudo, discord_id, role_obtenu FROM membres_formes WHERE 1=1";
 $params = [];
+$search_condition = "";
 
 if (!empty($search_query)) {
-    // Si recherche : on ignore le filtre de grade pour chercher "partout"
     $search_condition = " AND (pseudo LIKE ? OR discord_id LIKE ?)";
-    $sql_count .= $search_condition;
-    $sql_users .= $search_condition;
     $params[] = "%$search_query%";
     $params[] = "%$search_query%";
 } else {
-    // Sinon : on filtre par le grade de l'onglet actif
-    $sql_count .= " AND role_obtenu = ?";
-    $sql_users .= " AND role_obtenu = ?";
+    $search_condition = " AND role_obtenu = ?";
     $params[] = $role_filter;
 }
 
-// Pagination
+// Total pour pagination
+$sql_count = "SELECT COUNT(DISTINCT pseudo) FROM membres_formes WHERE 1=1 $search_condition";
 $countStmt = $pdo->prepare($sql_count);
 $countStmt->execute($params);
 $total_members = $countStmt->fetchColumn();
 $total_pages = ceil($total_members / $limit);
 
-$sql_users .= " ORDER BY pseudo ASC LIMIT $limit OFFSET $offset";
+// Requête SQL Server avec OFFSET / FETCH (Nécessite SQL Server 2012+)
+$sql_users = "SELECT DISTINCT pseudo, discord_id, role_obtenu 
+              FROM membres_formes 
+              WHERE 1=1 $search_condition 
+              ORDER BY pseudo ASC 
+              OFFSET $offset ROWS FETCH NEXT $limit ROWS ONLY";
+
 $pseudoStmt = $pdo->prepare($sql_users);
 $pseudoStmt->execute($params);
 $pseudos_data = $pseudoStmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Construction de la matrice
+// Matrice des validations
 $matrix = [];
 if (!empty($pseudos_data)) {
     $pseudos_only = array_column($pseudos_data, 'pseudo');
-    $in = str_repeat('?,', count($pseudos_only) - 1) . '?';
-    $dataStmt = $pdo->prepare("SELECT * FROM membres_formes WHERE pseudo IN ($in)");
+    $placeholders = str_repeat('?,', count($pseudos_only) - 1) . '?';
+    $dataStmt = $pdo->prepare("SELECT * FROM membres_formes WHERE pseudo IN ($placeholders)");
     $dataStmt->execute($pseudos_only);
     $rows = $dataStmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -164,11 +167,13 @@ if (!empty($pseudos_data)) {
         ];
     }
     foreach ($rows as $row) {
-        if ($row['formation_id']) { $matrix[$row['pseudo']]['validations'][] = $row['formation_id']; }
+        if ($row['formation_id']) { 
+            $matrix[$row['pseudo']]['validations'][] = $row['formation_id']; 
+        }
     }
 }
 
-// Recap Stats (basé sur le rôle de l'onglet, sauf si recherche)
+// Recap Stats
 $stats_recap = [];
 $stat_role = !empty($search_query) ? null : $role_filter;
 foreach ($all_formations as $f) {
@@ -204,7 +209,6 @@ foreach ($all_formations as $f) {
         <div class="col-12"><h5 class="fw-bold mb-0">📊 Statistiques <?= !empty($search_query) ? '(Globales)' : $role_filter.'s' ?></h5></div>
         <?php foreach ($all_formations as $f): 
             $count = $stats_recap[$f['id']] ?? 0;
-            $divisor = !empty($search_query) ? $total_members : $total_members; // Simplifié ici
             $pct = ($total_members > 0) ? ($count / $total_members) * 100 : 0;
         ?>
         <div class="col-xl-2 col-md-4 col-6">
@@ -369,7 +373,6 @@ foreach ($all_formations as $f) {
 <?php endif; ?>
 
 <script>
-    // Scroll restoration
     window.addEventListener('load', () => {
         const urlParams = new URLSearchParams(window.location.search);
         const scrollTarget = parseInt(urlParams.get('scroll')) || 0;
