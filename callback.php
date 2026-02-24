@@ -108,10 +108,21 @@ if ($dbUser) {
 
     $insert = $pdo->prepare("INSERT INTO users (discord_id, username, avatar, role) VALUES (?, ?, ?, ?)");
     $insert->execute([$discord_id, $username, $avatar, $role]);
-    
-    // Récupération de l'ID sous SQL Server
+
+    // Récupération de l'ID sous SQL Server : prefer SCOPE_IDENTITY() si lastInsertId() ne retourne rien
     $user_internal_id = $pdo->lastInsertId();
-    
+    if (empty($user_internal_id)) {
+        try {
+            $stmtId = $pdo->query('SELECT CAST(SCOPE_IDENTITY() AS INT) AS id');
+            $resId = $stmtId->fetch(PDO::FETCH_ASSOC);
+            if ($resId && isset($resId['id'])) {
+                $user_internal_id = (int)$resId['id'];
+            }
+        } catch (PDOException $e) {
+            error_log('Erreur récupération ID utilisateur: ' . $e->getMessage());
+        }
+    }
+
     addLog($pdo, $username, "Inscription : Nouvel utilisateur détecté (ID Discord: $discord_id).");
 }
 

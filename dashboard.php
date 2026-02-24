@@ -96,7 +96,7 @@ try {
 
     // 2. DONNÉES FORMATIONS
     $formations_data = $pdo->query("SELECT f.*, fr.pseudo as lead_nom, u.avatar as lead_avatar,
-        (SELECT GROUP_CONCAT(CONCAT(IFNULL(fm.pseudo, 'Inconnu'), '|', IFNULL(us.avatar, '')) SEPARATOR ';;') 
+        (SELECT STRING_AGG(CONCAT(ISNULL(fm.pseudo, 'Inconnu'), '|', ISNULL(us.avatar, '')), ';;') 
          FROM formation_staff fs
          JOIN formateurs fm ON fs.formateur_id = fm.id 
          LEFT JOIN users us ON fm.discord_id = us.discord_id
@@ -116,10 +116,10 @@ try {
     }
 
     // 4. ACTIVITÉ
-    $formateursData = $pdo->query("SELECT f.pseudo, u.avatar, COUNT(p.id) as total_sessions FROM formateurs f LEFT JOIN users u ON f.discord_id = u.discord_id LEFT JOIN planning p ON f.pseudo = p.formateur AND MONTH(p.date) = MONTH(CURRENT_DATE) AND YEAR(p.date) = YEAR(CURRENT_DATE) GROUP BY f.id, f.pseudo, u.avatar ORDER BY total_sessions DESC")->fetchAll(PDO::FETCH_ASSOC);
+    $formateursData = $pdo->query("SELECT f.pseudo, u.avatar, COUNT(p.id) as total_sessions FROM formateurs f LEFT JOIN users u ON f.discord_id = u.discord_id LEFT JOIN planning p ON f.pseudo = p.formateur AND MONTH(p.date) = MONTH(GETDATE()) AND YEAR(p.date) = YEAR(GETDATE()) GROUP BY f.id, f.pseudo, u.avatar ORDER BY total_sessions DESC")->fetchAll(PDO::FETCH_ASSOC);
     
     // 5. HISTORIQUE
-    $historiqueGlobal = $pdo->query("SELECT m.*, f.titre as formation_titre FROM membres_formes m LEFT JOIN formations f ON m.formation_id = f.id ORDER BY m.date_reussite DESC LIMIT 50")->fetchAll(PDO::FETCH_ASSOC);
+    $historiqueGlobal = $pdo->query("SELECT TOP 50 m.*, f.titre as formation_titre FROM membres_formes m LEFT JOIN formations f ON m.formation_id = f.id ORDER BY m.date_reussite DESC")->fetchAll(PDO::FETCH_ASSOC);
 
 } catch (PDOException $e) {
     echo "Erreur SQL : " . $e->getMessage();
