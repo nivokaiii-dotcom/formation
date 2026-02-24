@@ -11,7 +11,7 @@ if (session_status() === PHP_SESSION_NONE) {
 ================================== */
 function addLog($pdo, $user, $action) {
     try {
-        // Remplacement de NOW() par GETDATE() pour SQL Server
+        // SQL Server utilise GETDATE() au lieu de NOW()
         $stmt = $pdo->prepare("INSERT INTO logs (utilisateur, action, date_action) VALUES (?, ?, GETDATE())");
         $stmt->execute([$user, $action]);
     } catch (PDOException $e) {
@@ -57,11 +57,10 @@ if (!isset($token['access_token'])) {
    3. Récupération profil Discord
 ================================ */
 $ch = curl_init("https://discord.com/api/users/@me");
-curl_array = [
+curl_setopt_array($ch, [
     CURLOPT_RETURNTRANSFER => true,
     CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $token['access_token']]
-];
-curl_setopt_array($ch, $curl_array);
+]);
 
 $response = curl_exec($ch);
 curl_close($ch);
@@ -77,16 +76,16 @@ if (!isset($discordUser['id'])) {
 ================================ */
 $discord_id = $discordUser['id'];
 $username   = $discordUser['username'];
-$avatar     = !empty($discordUser['avatar']) 
+$avatar      = !empty($discordUser['avatar']) 
               ? "https://cdn.discordapp.com/avatars/$discord_id/{$discordUser['avatar']}.png" 
               : "https://ui-avatars.com/api/?name=" . urlencode($username) . "&background=random";
 
+// Liste des IDs Discord qui deviennent admin automatiquement
 $super_admins = ["882717172575653928"];
 
 /* ===============================
    5. Gestion Base de Données (SQL Server)
 ================================ */
-// On cherche l'utilisateur
 $stmt = $pdo->prepare("SELECT id, role FROM users WHERE discord_id = ?");
 $stmt->execute([$discord_id]);
 $dbUser = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -104,6 +103,7 @@ if ($dbUser) {
     }
 } else {
     // NOUVEL UTILISATEUR
+    // Si le rôle est NULL, assurez-vous que la colonne 'role' dans SQL Server accepte les NULLs
     $role = in_array($discord_id, $super_admins) ? 'admin' : null;
 
     $insert = $pdo->prepare("INSERT INTO users (discord_id, username, avatar, role) VALUES (?, ?, ?, ?)");
