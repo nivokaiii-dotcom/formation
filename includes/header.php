@@ -2,10 +2,12 @@
 ob_start();
 require_once 'config.php';
 
+// Initialisation sécurisée de la session
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
+// Vérification de l'authentification
 if (!isset($_SESSION['user'])) {
     header("Location: login.php");
     exit();
@@ -15,34 +17,36 @@ if (!isset($_SESSION['user'])) {
     SYNCHRONISATION ET VÉRIFICATION DU RÔLE (SQL SERVER)
    ============================================================ */
 try {
-    // On récupère le rôle actuel directement en BDD pour éviter les sessions périmées
-    $stmtCheck = $pdo->prepare("SELECT role FROM users WHERE discord_id = ?");
+    // Requête compatible SQL Server
+    $stmtCheck = $pdo->prepare("SELECT [role] FROM users WHERE discord_id = ?");
     $stmtCheck->execute([$_SESSION['user']['discord_id']]);
     $userFreshData = $stmtCheck->fetch(PDO::FETCH_ASSOC);
 
-    // Sécurité : Si l'utilisateur n'existe plus ou si son rôle est NULL/vide
+    // Sécurité : Accès refusé si l'utilisateur n'existe plus ou n'a plus de rôle
     if (!$userFreshData || empty($userFreshData['role'])) {
         session_destroy();
         header("Location: login.php?error=access_denied");
         exit();
     }
 
-    // Mise à jour de la session si le rôle a changé en BDD
+    // Mise à jour si changement de rôle détecté
     if ($_SESSION['user']['role'] !== $userFreshData['role']) {
         $_SESSION['user']['role'] = $userFreshData['role'];
+        session_regenerate_id(true); // Sécurité accrue
     }
 } catch (PDOException $e) {
-    // En cas d'erreur SQL, on évite de bloquer tout le site mais on log
-    error_log("Erreur synchro rôle : " . $e->getMessage());
+    error_log("Erreur Synchro Rôle: " . $e->getMessage());
 }
 
+// Variables d'affichage
 $role = $_SESSION['user']['role'];
-$discord_id = htmlspecialchars($_SESSION['user']['discord_id'] ?? 'N/A');
+$discord_id = htmlspecialchars($_SESSION['user']['discord_id'] ?? 'User');
 $username = htmlspecialchars($_SESSION['user']['username'] ?? 'Utilisateur');
 $avatar_user = $_SESSION['user']['avatar'] ?? 'https://ui-avatars.com/api/?name='.urlencode($username).'&background=random';
 $current_page = basename($_SERVER['PHP_SELF']);
 
-// Configuration Logo
+// Titre dynamique
+$page_title = ucfirst(str_replace(['admin_', '.php', '_'], ['', '', ' '], $current_page));
 $logo_path = "includes/favicon.ico"; 
 ?>
 <!DOCTYPE html>
@@ -50,7 +54,7 @@ $logo_path = "includes/favicon.ico";
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Staff Panel | <?= ucfirst(str_replace(['admin_', '.php'], ['', ''], $current_page)) ?></title>
+    <title>Formation Panel | <?= $page_title ?></title>
     
     <link rel="icon" type="image/png" href="<?= $logo_path ?>">
     
@@ -73,8 +77,10 @@ $logo_path = "includes/favicon.ico";
             font-family: 'Inter', sans-serif;
             background-color: var(--body-bg);
             color: var(--text-main);
-            margin: 0;
             transition: background 0.3s ease;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
         }
 
         .navbar-main { background: var(--nav-bg); box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); padding: 0.6rem 0; }
@@ -95,8 +101,10 @@ $logo_path = "includes/favicon.ico";
             width: 35px; height: 35px; border-radius: 10px; display: flex; align-items: center; justify-content: center;
             cursor: pointer; transition: all 0.2s;
         }
-        .nav-avatar { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; }
-        .logout-icon { color: var(--danger-soft); font-size: 1.2rem; transition: transform 0.2s; }
+        .theme-toggle:hover { background: rgba(255,255,255,0.2); transform: translateY(-1px); }
+        
+        .nav-avatar { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; border: 1px solid rgba(255,255,255,0.2); }
+        .logout-icon { color: var(--danger-soft); font-size: 1.2rem; transition: all 0.2s; }
         .logout-icon:hover { transform: scale(1.1); color: #ff8a8a; }
 
         @media (max-width: 991px) {
@@ -106,11 +114,16 @@ $logo_path = "includes/favicon.ico";
 </head>
 <body>
 
+<script>
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    document.documentElement.setAttribute('data-bs-theme', savedTheme);
+</script>
+
 <nav class="navbar navbar-expand-lg navbar-dark navbar-main sticky-top">
     <div class="container">
         <a class="navbar-brand d-flex align-items-center fw-bold" href="dashboard.php">
             <img src="<?= $logo_path ?>" class="nav-logo" alt="Logo">
-            <span>STAFF PANEL</span>
+            <span>FORMATION PANEL</span>
         </a>
 
         <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
@@ -169,21 +182,25 @@ $logo_path = "includes/favicon.ico";
 </nav>
 
 <script>
-    const themeBtn = document.getElementById('themeBtn');
-    const themeIcon = document.getElementById('themeIcon');
-    const htmlTag = document.documentElement;
+    document.addEventListener('DOMContentLoaded', () => {
+        const themeBtn = document.getElementById('themeBtn');
+        const themeIcon = document.getElementById('themeIcon');
+        const htmlTag = document.documentElement;
 
-    const savedTheme = localStorage.getItem('theme') || 'light';
-    setTheme(savedTheme);
+        const updateIcon = (theme) => {
+            themeIcon.className = theme === 'dark' ? 'bi bi-moon-stars-fill' : 'bi bi-sun-fill';
+        };
 
-    themeBtn.addEventListener('click', () => {
-        const currentTheme = htmlTag.getAttribute('data-bs-theme');
-        setTheme(currentTheme === 'light' ? 'dark' : 'light');
+        // Initialisation icône
+        updateIcon(htmlTag.getAttribute('data-bs-theme'));
+
+        themeBtn.addEventListener('click', () => {
+            const currentTheme = htmlTag.getAttribute('data-bs-theme');
+            const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+            
+            htmlTag.setAttribute('data-bs-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            updateIcon(newTheme);
+        });
     });
-
-    function setTheme(theme) {
-        htmlTag.setAttribute('data-bs-theme', theme);
-        localStorage.setItem('theme', theme);
-        themeIcon.className = theme === 'dark' ? 'bi bi-moon-stars-fill' : 'bi bi-sun-fill';
-    }
 </script>
