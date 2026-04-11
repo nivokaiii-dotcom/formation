@@ -18,18 +18,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_role'])) {
     $newRole = $_POST['role'];
     $allowedRoles = ['user', 'admin'];
     
-    // Empêcher de changer son propre rôle
     if ($userId === $currentAdminId) {
         $message = "<div class='alert alert-warning shadow-sm'>Action impossible : Vous ne pouvez pas modifier votre propre rôle.</div>";
     } elseif (in_array($newRole, $allowedRoles)) {
         try {
-            // Syntaxe standard compatible SQL Server
             $stmt = $pdo->prepare("UPDATE users SET role = ? WHERE id = ?");
             $stmt->execute([$newRole, $userId]);
-            
-            // Note : Assure-toi que insertLog utilise GETDATE() pour SQL Server
             insertLog($pdo, "A changé le rôle de l'utilisateur ID $userId en $newRole");
-            
             $message = "<div class='alert alert-success shadow-sm'>Rôle mis à jour avec succès !</div>";
         } catch (PDOException $e) {
             $message = "<div class='alert alert-danger'>Erreur SQL : " . $e->getMessage() . "</div>";
@@ -41,16 +36,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_role'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_user'])) {
     $userId = (int)$_POST['user_id'];
     
-    // Empêcher de se supprimer soi-même
     if ($userId === $currentAdminId) {
         $message = "<div class='alert alert-warning shadow-sm'>Action impossible : Vous ne pouvez pas vous supprimer vous-même.</div>";
     } else {
         try {
             $stmt = $pdo->prepare("DELETE FROM users WHERE id = ?");
             $stmt->execute([$userId]);
-            
             insertLog($pdo, "A supprimé l'utilisateur ID $userId");
-            
             $message = "<div class='alert alert-success shadow-sm'>Utilisateur supprimé définitivement.</div>";
         } catch (PDOException $e) {
             $message = "<div class='alert alert-danger'>Erreur lors de la suppression : " . $e->getMessage() . "</div>";
@@ -58,99 +50,140 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_user'])) {
     }
 }
 
-// Récupération de la liste des utilisateurs (Syntaxe SQL Server compatible)
 $users = $pdo->query("SELECT id, username, discord_id, avatar, role FROM users ORDER BY username ASC")->fetchAll();
 ?>
 
 <style>
-    html, body { height: 100%; margin: 0; }
-    body { display: flex; flex-direction: column; min-height: 100vh; }
-    .main-content { flex: 1 0 auto; }
+    .main-content { min-height: 80vh; }
+
     .table-container { 
         background: var(--bs-card-bg); 
         border-radius: 12px; 
         border: 1px solid var(--bs-border-color); 
         overflow: hidden; 
     }
-    .role-badge { font-size: 0.75rem; padding: 5px 12px; border-radius: 50px; font-weight: 700; text-transform: uppercase; }
-    .role-admin { background: #fee2e2; color: #dc2626; border: 1px solid #fecaca; }
-    .role-user { background: #f3f4f6; color: #4b5563; border: 1px solid #e5e7eb; }
-    [data-bs-theme="dark"] .role-user { background: #334155; color: #f1f5f9; border-color: #475569; }
-    .avatar-user { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; border: 2px solid var(--bs-border-color); }
+    
+    /* Style des Badges auto-adaptatifs */
+    .role-badge { 
+        font-size: 0.7rem; 
+        padding: 4px 10px; 
+        border-radius: 50px; 
+        font-weight: 800; 
+        text-transform: uppercase; 
+        display: inline-block;
+    }
+    
+    .role-admin { 
+        background: rgba(220, 38, 38, 0.15); 
+        color: #ef4444; 
+        border: 1px solid rgba(220, 38, 38, 0.3); 
+    }
+    
+    .role-user { 
+        background: rgba(100, 116, 139, 0.15); 
+        color: var(--bs-secondary-color); 
+        border: 1px solid rgba(100, 116, 139, 0.3); 
+    }
+
+    .avatar-user { 
+        width: 38px; 
+        height: 38px; 
+        border-radius: 50%; 
+        object-fit: cover; 
+        border: 2px solid var(--bs-border-color); 
+    }
+    
     .btn-delete { 
         color: #ef4444; 
         background: rgba(239, 68, 68, 0.1); 
+        border: 1px solid transparent;
         transition: all 0.2s;
     }
-    .btn-delete:hover { background: #ef4444; color: white; }
-    .btn-delete:disabled { opacity: 0.5; cursor: not-allowed; background: #ccc; color: #666; }
-    .text-title { color: var(--bs-heading-color); }
+    .btn-delete:hover { 
+        background: #ef4444; 
+        color: white; 
+    }
+
+    /* Correction du tableau en mode sombre */
+    .table thead th {
+        background: rgba(var(--bs-emphasis-color-rgb), 0.03);
+        color: var(--bs-secondary-color);
+        text-transform: uppercase;
+        font-size: 0.75rem;
+        letter-spacing: 0.5px;
+        border-bottom: 2px solid var(--bs-border-color);
+    }
+
+    .me-row {
+        border-left: 4px solid #0dcaf0 !important;
+        background: rgba(13, 202, 240, 0.05) !important;
+    }
 </style>
 
 <div class="main-content">
     <div class="container py-5">
         <div class="d-flex justify-content-between align-items-center mb-4">
             <div>
-                <h2 class="fw-bold text-title mb-1">Gestion des Rôles</h2>
-                <p class="text-muted">Administrez les privilèges et les comptes</p>
+                <h2 class="fw-bold mb-1">Gestion des Rôles</h2>
+                <p class="text-muted mb-0">Administrez les privilèges et les comptes de l'équipe</p>
             </div>
-            <a href="index.php" class="btn btn-outline-secondary btn-sm fw-bold">
-                <i class="bi bi-house-door me-1"></i> Dashboard
+            <a href="dashboard.php" class="btn btn-sm btn-outline-secondary px-3 rounded-pill">
+                <i class="bi bi-arrow-left me-1"></i> Retour
             </a>
         </div>
 
         <?= $message ?>
 
-        <div class="table-container shadow-sm">
+        <div class="table-container shadow-sm mt-4">
             <div class="table-responsive">
                 <table class="table table-hover align-middle mb-0">
-                    <thead class="table-light">
+                    <thead>
                         <tr>
                             <th class="ps-4 py-3">Utilisateur</th>
-                            <th>Rôle</th>
-                            <th>Modifier</th>
+                            <th>Rôle Actuel</th>
+                            <th>Attribuer Rôle</th>
                             <th class="text-end pe-4">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                         <?php foreach ($users as $u): ?>
-                        <tr class="<?= $u['id'] == $currentAdminId ? 'table-info' : '' ?>">
+                        <tr class="<?= $u['id'] == $currentAdminId ? 'me-row' : '' ?>">
                             <td class="ps-4">
                                 <div class="d-flex align-items-center">
-                                    <?php 
-                                        $avatarUrl = !empty($u['avatar']) ? $u['avatar'] : 'https://ui-avatars.com/api/?name='.urlencode($u['username']);
-                                    ?>
-                                    <img src="<?= $avatarUrl ?>" class="avatar-user me-3" alt="Avatar">
+                                    <img src="<?= !empty($u['avatar']) ? $u['avatar'] : 'https://ui-avatars.com/api/?name='.urlencode($u['username']) ?>" class="avatar-user me-3">
                                     <div>
-                                        <div class="fw-bold text-title">
-                                            <?= htmlspecialchars($u['username'] ?? '') ?> 
-                                            <?= $u['id'] == $currentAdminId ? '<span class="badge bg-info text-dark ms-1">Moi</span>' : '' ?>
+                                        <div class="fw-bold">
+                                            <?= htmlspecialchars($u['username']) ?> 
+                                            <?php if($u['id'] == $currentAdminId): ?>
+                                                <span class="badge bg-info text-dark ms-1" style="font-size: 0.6rem;">VOUS</span>
+                                            <?php endif; ?>
                                         </div>
-                                        <div class="text-muted small">ID: <?= htmlspecialchars($u['discord_id'] ?? '') ?></div>
+                                        <div class="text-muted small" style="font-size: 0.75rem;">ID: <?= $u['discord_id'] ?></div>
                                     </div>
                                 </div>
                             </td>
                             <td>
-                                <span class="role-badge role-<?= htmlspecialchars($u['role']) ?>">
-                                    <?= htmlspecialchars($u['role']) ?>
+                                <span class="role-badge role-<?= $u['role'] ?>">
+                                    <i class="bi <?= $u['role'] === 'admin' ? 'bi-shield-lock-fill' : 'bi-person-fill' ?> me-1"></i>
+                                    <?= $u['role'] ?>
                                 </span>
                             </td>
                             <td>
                                 <form method="POST" class="d-flex align-items-center gap-2">
                                     <input type="hidden" name="user_id" value="<?= $u['id'] ?>">
-                                    <select name="role" class="form-select form-select-sm fw-bold" style="width: 110px;" <?= $u['id'] == $currentAdminId ? 'disabled' : '' ?>>
+                                    <select name="role" class="form-select form-select-sm fw-semibold" style="width: 110px; font-size: 0.85rem;" <?= $u['id'] == $currentAdminId ? 'disabled' : '' ?>>
                                         <option value="user" <?= $u['role'] === 'user' ? 'selected' : '' ?>>User</option>
                                         <option value="admin" <?= $u['role'] === 'admin' ? 'selected' : '' ?>>Admin</option>
                                     </select>
-                                    <button type="submit" name="update_role" class="btn btn-primary btn-sm rounded-pill" <?= $u['id'] == $currentAdminId ? 'disabled' : '' ?>>
-                                        <i class="bi bi-check-lg"></i>
+                                    <button type="submit" name="update_role" class="btn btn-primary btn-sm px-2" <?= $u['id'] == $currentAdminId ? 'disabled' : '' ?> title="Enregistrer">
+                                        <i class="bi bi-save"></i>
                                     </button>
                                 </form>
                             </td>
                             <td class="text-end pe-4">
-                                <form method="POST" onsubmit="return confirm('Confirmer la suppression définitive de cet utilisateur ?');">
+                                <form method="POST" onsubmit="return confirm('Attention : Suppression définitive ?');">
                                     <input type="hidden" name="user_id" value="<?= $u['id'] ?>">
-                                    <button type="submit" name="delete_user" class="btn btn-sm btn-delete rounded-pill px-3 fw-bold" <?= $u['id'] == $currentAdminId ? 'disabled' : '' ?>>
+                                    <button type="submit" name="delete_user" class="btn btn-sm btn-delete rounded-pill px-3 fw-bold" style="font-size: 0.8rem;" <?= $u['id'] == $currentAdminId ? 'disabled' : '' ?>>
                                         <i class="bi bi-trash3 me-1"></i> Supprimer
                                     </button>
                                 </form>

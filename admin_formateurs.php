@@ -21,13 +21,7 @@ if (isset($_POST['add'])) {
         header("Location: admin_formateurs.php");
         exit();
     } catch (PDOException $e) {
-        // Pour SQL Server (sqlsrv), l'erreur de contrainte unique est souvent liée au code d'erreur 2627 ou 2601
-        $errorInfo = $e->errorInfo;
-        if (isset($errorInfo[1]) && ($errorInfo[1] == 2627 || $errorInfo[1] == 2601)) {
-            $message = "Erreur : Cet ID Discord est déjà utilisé.";
-        } else {
-            $message = "Erreur : " . $e->getMessage();
-        }
+        $message = ($e->getCode() == 23000) ? "Erreur : Cet ID Discord est déjà utilisé." : "Erreur : " . $e->getMessage();
     }
 }
 
@@ -52,8 +46,7 @@ if (isset($_POST['delete'])) {
 }
 
 // RÉCUPÉRATION DES DONNÉES
-// Note : SQL Server nécessite parfois que les colonnes soient explicitement listées si 'avatar' est un type spécial (MAX)
-$query = "SELECT f.id, f.discord_id, f.pseudo, u.avatar 
+$query = "SELECT f.*, u.avatar 
           FROM formateurs f 
           LEFT JOIN users u ON f.discord_id = u.discord_id 
           ORDER BY f.id DESC";
@@ -160,7 +153,7 @@ $totalFormateurs = count($formateurs);
                                     <form method="POST">
                                         <div class="modal-header">
                                             <h5 class="modal-title">Modifier <?= htmlspecialchars($f['pseudo']); ?></h5>
-                                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                                         </div>
                                         <div class="modal-body">
                                             <input type="hidden" name="id" value="<?= $f['id']; ?>">
@@ -186,7 +179,7 @@ $totalFormateurs = count($formateurs);
                             <div class="modal-dialog modal-dialog-centered">
                                 <div class="modal-content">
                                     <form method="POST">
-                                        <div class="modal-header border-0"><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+                                        <div class="modal-header border-0"><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
                                         <div class="modal-body text-center py-4">
                                             <input type="hidden" name="id" value="<?= $f['id']; ?>">
                                             <i class="bi bi-exclamation-octagon text-danger" style="font-size: 3.5rem;"></i>
@@ -260,9 +253,7 @@ $totalFormateurs = count($formateurs);
         });
 
         document.getElementById('memberCount').textContent = visibleCount;
-        if (noResults) {
-            noResults.classList.toggle('d-none', visibleCount > 0);
-        }
+        noResults.classList.toggle('d-none', visibleCount > 0);
     });
 </script>
 

@@ -10,23 +10,15 @@ if (session_status() === PHP_SESSION_NONE) {
     FONCTION DE LOGS
 ================================== */
 function addLog($pdo, $action) {
-    $user = 'Anonyme';
-    if (isset($_SESSION['user']['username'])) {
-        $user = $_SESSION['user']['username'];
-    } elseif (isset($_SESSION['username'])) {
-        $user = $_SESSION['username'];
-    }
-
+    $user = $_SESSION['user']['username'] ?? $_SESSION['username'] ?? 'Anonyme';
     try {
-        // SQL Server utilise GETDATE() au lieu de NOW()
-        $stmt = $pdo->prepare("INSERT INTO logs (utilisateur, action, date_action) VALUES (?, ?, GETDATE())");
+        $stmt = $pdo->prepare("INSERT INTO logs (utilisateur, action, date_action) VALUES (?, ?, NOW())");
         $stmt->execute([$user, $action]);
     } catch (PDOException $e) {
         error_log("Erreur Log : " . $e->getMessage());
     }
 }
 
-// Définition de la permission
 $can_edit = isset($_SESSION['user']['role']) && $_SESSION['user']['role'] !== 'user';
 
 /* ==================================
@@ -46,8 +38,7 @@ if ($can_edit) {
         $discord_id = trim($_POST['new_discord_id']);
         $role = $_POST['new_role'];
         if (!empty($pseudo) && !empty($discord_id)) {
-            // SQL Server : CAST(GETDATE() AS DATE) au lieu de CURDATE()
-            $stmt = $pdo->prepare("INSERT INTO membres_formes (discord_id, pseudo, role_obtenu, formation_id, date_reussite) VALUES (?, ?, ?, NULL, CAST(GETDATE() AS DATE))");
+            $stmt = $pdo->prepare("INSERT INTO membres_formes (discord_id, pseudo, role_obtenu, formation_id, date_reussite) VALUES (?, ?, ?, NULL, CURDATE())");
             $stmt->execute([$discord_id, $pseudo, $role]);
             addLog($pdo, "Réussites : Création du profil staff pour '$pseudo' ($role)");
         }
@@ -81,13 +72,12 @@ if ($can_edit) {
             $pdo->prepare("DELETE FROM membres_formes WHERE id = ?")->execute([$existing['id']]);
             addLog($pdo, "Réussites : Retrait formation '$fTitre' pour $pseudo");
         } else {
-            // SQL Server : TOP 1 au lieu de LIMIT 1
-            $stmtInfo = $pdo->prepare("SELECT TOP 1 discord_id, role_obtenu FROM membres_formes WHERE pseudo = ?");
+            $stmtInfo = $pdo->prepare("SELECT discord_id, role_obtenu FROM membres_formes WHERE pseudo = ? LIMIT 1");
             $stmtInfo->execute([$pseudo]);
             $info = $stmtInfo->fetch();
 
             if ($info) {
-                $pdo->prepare("INSERT INTO membres_formes (discord_id, pseudo, role_obtenu, formation_id, date_reussite, formateur_nom) VALUES (?, ?, ?, ?, CAST(GETDATE() AS DATE), ?)")
+                $pdo->prepare("INSERT INTO membres_formes (discord_id, pseudo, role_obtenu, formation_id, date_reussite, formateur_nom) VALUES (?, ?, ?, ?, CURDATE(), ?)")
                     ->execute([$info['discord_id'], $pseudo, $info['role_obtenu'], $formation_id, $formateur]);
                 addLog($pdo, "Réussites : Validation formation '$fTitre' pour $pseudo");
             }
@@ -113,83 +103,69 @@ require 'includes/header.php';
 ================================== */
 $active_tab = $_GET['tab'] ?? 'tab-mod';
 $search_query = isset($_GET['search']) ? trim($_GET['search']) : '';
-$current_page_num = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+$current_page_num = max(1, (int)($_GET['page'] ?? 1));
 $limit = 20; 
 $offset = ($current_page_num - 1) * $limit;
 
 $all_formations = $pdo->query("SELECT * FROM formations ORDER BY id ASC")->fetchAll(PDO::FETCH_ASSOC);
 $role_filter = ($active_tab == 'tab-mod') ? 'Modérateur' : 'Support';
 
+// Construction de la condition de recherche
+$where_clauses = [];
 $params = [];
-$search_condition = "";
 
 if (!empty($search_query)) {
-    $search_condition = " AND (pseudo LIKE ? OR discord_id LIKE ?)";
+    $where_clauses[] = "(pseudo LIKE ? OR discord_id LIKE ?)";
     $params[] = "%$search_query%";
     $params[] = "%$search_query%";
 } else {
-    $search_condition = " AND role_obtenu = ?";
+    $where_clauses[] = "role_obtenu = ?";
     $params[] = $role_filter;
 }
 
-// Total pour pagination
-$sql_count = "SELECT COUNT(DISTINCT pseudo) FROM membres_formes WHERE 1=1 $search_condition";
-$countStmt = $pdo->prepare($sql_count);
-$countStmt->execute($params);
-$total_members = $countStmt->fetchColumn();
-$total_pages = ceil($total_members / $limit);
+$where_sql = " WHERE " . implode(" AND ", $where_clauses);
 
-// Requête SQL Server avec OFFSET / FETCH (Nécessite SQL Server 2012+)
-$sql_users = "SELECT DISTINCT pseudo, discord_id, role_obtenu 
-              FROM membres_formes 
-              WHERE 1=1 $search_condition 
-              ORDER BY pseudo ASC 
-              OFFSET $offset ROWS FETCH NEXT $limit ROWS ONLY";
+// Compter le total de membres uniques filtrés
+$total_members = $pdo->prepare("SELECT COUNT(DISTINCT pseudo) FROM membres_formes $where_sql");
+$total_members->execute($params);
+$total_members_count = $total_members->fetchColumn();
+$total_pages = ceil($total_members_count / $limit);
 
+// Récupérer les pseudos pour la page actuelle
+$sql_users = "SELECT DISTINCT pseudo, discord_id, role_obtenu FROM membres_formes $where_sql ORDER BY pseudo ASC LIMIT $limit OFFSET $offset";
 $pseudoStmt = $pdo->prepare($sql_users);
 $pseudoStmt->execute($params);
 $pseudos_data = $pseudoStmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Matrice des validations
+// Construction de la matrice des validations
 $matrix = [];
 if (!empty($pseudos_data)) {
     $pseudos_only = array_column($pseudos_data, 'pseudo');
-    $placeholders = str_repeat('?,', count($pseudos_only) - 1) . '?';
-    $dataStmt = $pdo->prepare("SELECT * FROM membres_formes WHERE pseudo IN ($placeholders)");
+    $in = str_repeat('?,', count($pseudos_only) - 1) . '?';
+    $dataStmt = $pdo->prepare("SELECT pseudo, formation_id FROM membres_formes WHERE pseudo IN ($in) AND formation_id IS NOT NULL");
     $dataStmt->execute($pseudos_only);
-    $rows = $dataStmt->fetchAll(PDO::FETCH_ASSOC);
+    $all_validations = $dataStmt->fetchAll(PDO::FETCH_GROUP | PDO::FETCH_COLUMN);
 
     foreach ($pseudos_data as $p_row) {
         $matrix[$p_row['pseudo']] = [
             'discord_id' => $p_row['discord_id'], 
             'role' => $p_row['role_obtenu'],
-            'validations' => []
+            'validations' => $all_validations[$p_row['pseudo']] ?? []
         ];
-    }
-    foreach ($rows as $row) {
-        if ($row['formation_id']) { 
-            $matrix[$row['pseudo']]['validations'][] = $row['formation_id']; 
-        }
     }
 }
 
-// Recap Stats
+// Stats : Calculées sur la base de TOUS les membres correspondant au filtre (pas seulement la page)
 $stats_recap = [];
-$stat_role = !empty($search_query) ? null : $role_filter;
 foreach ($all_formations as $f) {
-    if ($stat_role) {
-        $st = $pdo->prepare("SELECT COUNT(DISTINCT pseudo) FROM membres_formes WHERE formation_id = ? AND role_obtenu = ?");
-        $st->execute([$f['id'], $stat_role]);
-    } else {
-        $st = $pdo->prepare("SELECT COUNT(DISTINCT pseudo) FROM membres_formes WHERE formation_id = ?");
-        $st->execute([$f['id']]);
-    }
+    $sql_stat = "SELECT COUNT(DISTINCT pseudo) FROM membres_formes $where_sql AND formation_id = ?";
+    $st = $pdo->prepare($sql_stat);
+    $st->execute(array_merge($params, [$f['id']]));
     $stats_recap[$f['id']] = $st->fetchColumn();
 }
 ?>
 
 <style>
-    body { background-color: var(--bs-body-bg); color: var(--bs-body-color); }
     .table-responsive { border-radius: 12px; background: var(--bs-card-bg); border: 1px solid var(--bs-border-color); }
     .badge-toggle { display: inline-flex; align-items: center; justify-content: center; padding: 8px 14px; border-radius: 50px; font-size: 0.65rem; font-weight: 800; border: none; transition: 0.2s; width: 85px; text-decoration: none; cursor: pointer; }
     .btn-valid { background-color: #10b981; color: white; }
@@ -200,16 +176,18 @@ foreach ($all_formations as $f) {
     <?php endif; ?>
     .btn-empty { background-color: var(--bs-tertiary-bg); color: #94a3b8; border: 1px dashed var(--bs-border-color); }
     .sticky-col { position: sticky; left: 0; background: var(--bs-card-bg); z-index: 2; border-right: 2px solid var(--bs-border-color) !important; }
-    .stat-card { background: var(--bs-card-bg); border-left: 4px solid #3b82f6; border-radius: 8px; transition: 0.2s; }
+    .stat-card { background: var(--bs-card-bg); border-left: 4px solid #3b82f6; border-radius: 8px; transition: 0.2s; height: 100%; }
 </style>
 
 <div class="container-fluid mt-4 px-4">
     
     <div class="row g-3 mb-4">
-        <div class="col-12"><h5 class="fw-bold mb-0">📊 Statistiques <?= !empty($search_query) ? '(Globales)' : $role_filter.'s' ?></h5></div>
+        <div class="col-12">
+            <h5 class="fw-bold mb-0">📊 Statistiques <?= !empty($search_query) ? "(Résultats recherche)" : $role_filter.'s' ?> (Total: <?= $total_members_count ?>)</h5>
+        </div>
         <?php foreach ($all_formations as $f): 
             $count = $stats_recap[$f['id']] ?? 0;
-            $pct = ($total_members > 0) ? ($count / $total_members) * 100 : 0;
+            $pct = ($total_members_count > 0) ? ($count / $total_members_count) * 100 : 0;
         ?>
         <div class="col-xl-2 col-md-4 col-6">
             <div class="stat-card shadow-sm p-3">
@@ -229,7 +207,7 @@ foreach ($all_formations as $f) {
         <div class="d-flex gap-3">
             <form method="GET" class="d-flex gap-2">
                 <input type="hidden" name="tab" value="<?= $active_tab ?>">
-                <input type="text" name="search" class="form-control border-0 shadow-sm" style="width: 300px;" placeholder="Rechercher partout..." value="<?= htmlspecialchars($search_query) ?>">
+                <input type="text" name="search" class="form-control border-0 shadow-sm" style="width: 250px;" placeholder="Rechercher un membre..." value="<?= htmlspecialchars($search_query) ?>">
                 <button type="submit" class="btn btn-primary"><i class="bi bi-search"></i></button>
                 <?php if(!empty($search_query)): ?>
                     <a href="?tab=<?= $active_tab ?>" class="btn btn-light border"><i class="bi bi-x-lg"></i></a>
@@ -249,7 +227,7 @@ foreach ($all_formations as $f) {
         <li class="nav-item"><a href="?tab=tab-sup&page=1" class="nav-link <?= $active_tab == 'tab-sup' ? 'active' : '' ?>">Supports</a></li>
     </ul>
     <?php else: ?>
-        <div class="alert alert-info py-2 shadow-sm"><i class="bi bi-info-circle me-2"></i> Résultats pour "<?= htmlspecialchars($search_query) ?>" dans tout le staff.</div>
+        <div class="alert alert-info py-2 shadow-sm"><i class="bi bi-info-circle me-2"></i> <?= $total_members_count ?> résultat(s) pour "<?= htmlspecialchars($search_query) ?>"</div>
     <?php endif; ?>
 
     <div class="table-responsive shadow-sm mb-4">
@@ -265,13 +243,13 @@ foreach ($all_formations as $f) {
             </thead>
             <tbody>
                 <?php if(empty($matrix)): ?>
-                    <tr><td colspan="<?= count($all_formations) + 2 ?>" class="py-5 text-muted">Aucun résultat trouvé.</td></tr>
+                    <tr><td colspan="<?= count($all_formations) + 2 ?>" class="py-5 text-muted">Aucun membre trouvé.</td></tr>
                 <?php endif; ?>
                 <?php foreach ($matrix as $pseudo => $data): ?>
-                    <tr class="member-row">
+                    <tr>
                         <td class="text-start ps-4 sticky-col fw-bold">
                             <div><?= htmlspecialchars($pseudo) ?></div>
-                            <small class="badge bg-secondary-soft text-muted fw-normal" style="font-size: 0.6rem;"><?= $data['role'] ?> | <?= $data['discord_id'] ?></small>
+                            <small class="text-muted fw-normal" style="font-size: 0.65rem;"><?= $data['role'] ?> • <?= $data['discord_id'] ?></small>
                         </td>
                         <?php foreach ($all_formations as $f): 
                             $isValid = in_array($f['id'], $data['validations']);
@@ -309,14 +287,14 @@ foreach ($all_formations as $f) {
                                     <input type="hidden" name="scroll_pos" class="scroll_input">
                                     <input type="hidden" name="update_role_trigger" value="1">
                                     <input type="hidden" name="new_role" value="<?= ($data['role'] === 'Support') ? 'Modérateur' : 'Support' ?>">
-                                    <button type="submit" class="btn btn-sm btn-light border" title="Changer de Grade"><i class="bi bi-arrow-left-right text-primary"></i></button>
+                                    <button type="submit" class="btn btn-sm btn-light border" title="Switcher Grade"><i class="bi bi-arrow-left-right text-primary"></i></button>
                                 </form>
-                                <form method="POST" onsubmit="return confirm('Supprimer ce membre ?');">
+                                <form method="POST" onsubmit="return confirm('Supprimer définitivement <?= htmlspecialchars($pseudo) ?> ?');">
                                     <input type="hidden" name="pseudo" value="<?= htmlspecialchars($pseudo) ?>">
                                     <input type="hidden" name="current_tab" value="<?= $active_tab ?>">
                                     <input type="hidden" name="current_page" value="<?= $current_page_num ?>">
                                     <input type="hidden" name="search_query" value="<?= htmlspecialchars($search_query) ?>">
-                                    <button type="submit" name="delete_member" class="btn btn-sm btn-outline-danger" title="Supprimer"><i class="bi bi-trash"></i></button>
+                                    <button type="submit" name="delete_member" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
                                 </form>
                             </div>
                         </td>
@@ -343,21 +321,21 @@ foreach ($all_formations as $f) {
     <div class="modal-dialog">
         <form method="POST" class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title fw-bold">Ajouter au Staff</h5>
+                <h5 class="modal-title fw-bold">Ajouter un nouveau membre</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
                 <input type="hidden" name="current_tab" value="<?= $active_tab ?>">
                 <div class="mb-3">
-                    <label class="form-label fw-bold">Pseudo</label>
-                    <input type="text" name="new_pseudo" class="form-control" placeholder="ex: JohnDoe" required>
+                    <label class="form-label fw-bold">Pseudo RP</label>
+                    <input type="text" name="new_pseudo" class="form-control" placeholder="ex: John Doe" required>
                 </div>
                 <div class="mb-3">
                     <label class="form-label fw-bold">ID Discord</label>
-                    <input type="text" name="new_discord_id" class="form-control" placeholder="ex: 1234567890" required>
+                    <input type="text" name="new_discord_id" class="form-control" placeholder="ex: 2835..." required>
                 </div>
                 <div class="mb-3">
-                    <label class="form-label fw-bold">Grade Initial</label>
+                    <label class="form-label fw-bold">Grade</label>
                     <select name="new_role" class="form-select">
                         <option value="Support" <?= $active_tab == 'tab-sup' ? 'selected' : '' ?>>Support</option>
                         <option value="Modérateur" <?= $active_tab == 'tab-mod' ? 'selected' : '' ?>>Modérateur</option>
@@ -365,7 +343,7 @@ foreach ($all_formations as $f) {
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="submit" name="add_new_member" class="btn btn-primary w-100">Enregistrer</button>
+                <button type="submit" name="add_new_member" class="btn btn-primary w-100">Créer le profil</button>
             </div>
         </form>
     </div>
@@ -373,12 +351,14 @@ foreach ($all_formations as $f) {
 <?php endif; ?>
 
 <script>
+    // Restauration du scroll
     window.addEventListener('load', () => {
         const urlParams = new URLSearchParams(window.location.search);
         const scrollTarget = parseInt(urlParams.get('scroll')) || 0;
         if (scrollTarget > 0) window.scrollTo(0, scrollTarget);
     });
 
+    // Capture de la position du scroll avant envoi
     document.querySelectorAll('.action-form').forEach(form => {
         form.addEventListener('submit', function() {
             let input = this.querySelector('.scroll_input');
@@ -387,4 +367,7 @@ foreach ($all_formations as $f) {
     });
 </script>
 
-<?php require 'includes/footer.php'; ob_end_flush(); ?>
+<?php 
+require 'includes/footer.php'; 
+ob_end_flush(); 
+?>

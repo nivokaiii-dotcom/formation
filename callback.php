@@ -7,12 +7,11 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 /* ==================================
-    FONCTION DE LOGS (Syntaxe MSSQL)
+    FONCTION DE LOGS
 ================================== */
 function addLog($pdo, $user, $action) {
     try {
-        // SQL Server utilise GETDATE() au lieu de NOW()
-        $stmt = $pdo->prepare("INSERT INTO logs (utilisateur, action, date_action) VALUES (?, ?, GETDATE())");
+        $stmt = $pdo->prepare("INSERT INTO logs (utilisateur, action, date_action) VALUES (?, ?, NOW())");
         $stmt->execute([$user, $action]);
     } catch (PDOException $e) {
         error_log("Erreur Log : " . $e->getMessage());
@@ -74,48 +73,45 @@ if (!isset($discordUser['id'])) {
 /* ===============================
    4. Préparation des données
 ================================ */
-$discord_id = (string)$discordUser['id']; // Forcer en string pour éviter les problèmes de grands entiers
+$discord_id = $discordUser['id'];
 $username   = $discordUser['username'];
 $avatar     = !empty($discordUser['avatar']) 
               ? "https://cdn.discordapp.com/avatars/$discord_id/{$discordUser['avatar']}.png" 
               : "https://ui-avatars.com/api/?name=" . urlencode($username) . "&background=random";
 
-// Liste des IDs Discord qui deviennent admin
+// Liste des IDs Discord qui deviennent admin automatiquement à l'inscription
 $super_admins = ["882717172575653928"];
 
 /* ===============================
-   5. Gestion Base de Données (MSSQL)
+   5. Gestion Base de Données
 ================================ */
-try {
-    $stmt = $pdo->prepare("SELECT id, role FROM users WHERE discord_id = ?");
-    $stmt->execute([$discord_id]);
-    $dbUser = $stmt->fetch(PDO::FETCH_ASSOC);
+$stmt = $pdo->prepare("SELECT id, role FROM users WHERE discord_id = ?");
+$stmt->execute([$discord_id]);
+$dbUser = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    if ($dbUser) {
-        // UTILISATEUR EXISTANT
-        $role = $dbUser['role'];
-        $user_internal_id = $dbUser['id'];
+if ($dbUser) {
+    // UTILISATEUR EXISTANT
+    $role = $dbUser['role'];
+    $user_internal_id = $dbUser['id'];
 
-        $update = $pdo->prepare("UPDATE users SET username = ?, avatar = ? WHERE discord_id = ?");
-        $update->execute([$username, $avatar, $discord_id]);
-        
-        if (!empty($role)) {
-            addLog($pdo, $username, "Connexion : L'utilisateur s'est connecté au panel.");
-        }
-    } else {
-        // NOUVEL UTILISATEUR
-        $role = in_array($discord_id, $super_admins) ? 'admin' : null;
-
-        $insert = $pdo->prepare("INSERT INTO users (discord_id, username, avatar, role) VALUES (?, ?, ?, ?)");
-        $insert->execute([$discord_id, $username, $avatar, $role]);
-        
-        // Récupération de l'ID sous SQL Server
-        $user_internal_id = $pdo->lastInsertId();
-        
-        addLog($pdo, $username, "Inscription : Nouvel utilisateur (ID Discord: $discord_id).");
+    // Mise à jour des infos (Pseudo et Avatar peuvent changer sur Discord)
+    $update = $pdo->prepare("UPDATE users SET username = ?, avatar = ? WHERE discord_id = ?");
+    $update->execute([$username, $avatar, $discord_id]);
+    
+    // Log de connexion (uniquement si l'utilisateur a un rôle et peut entrer)
+    if (!empty($role)) {
+        addLog($pdo, $username, "Connexion : L'utilisateur s'est connecté au panel.");
     }
-} catch (PDOException $e) {
-    die("Erreur de base de données : " . $e->getMessage());
+} else {
+    // NOUVEL UTILISATEUR
+    $role = in_array($discord_id, $super_admins) ? 'admin' : null;
+
+    $insert = $pdo->prepare("INSERT INTO users (discord_id, username, avatar, role) VALUES (?, ?, ?, ?)");
+    $insert->execute([$discord_id, $username, $avatar, $role]);
+    $user_internal_id = $pdo->lastInsertId();
+    
+    // Log de création de compte
+    addLog($pdo, $username, "Inscription : Nouvel utilisateur détecté (ID Discord: $discord_id).");
 }
 
 /* ===============================
@@ -139,6 +135,7 @@ $_SESSION['user'] = [
     'role'       => $role
 ];
 
+// Redirection finale vers le tableau de bord
 header("Location: dashboard.php");
 exit();
 ob_end_flush();

@@ -14,11 +14,10 @@ if (!isset($_SESSION['user'])) {
 }
 
 /* ============================================================
-    SYNCHRONISATION ET VÉRIFICATION DU RÔLE (SQL SERVER)
+    SYNCHRONISATION ET VÉRIFICATION DU RÔLE
    ============================================================ */
 try {
-    // Requête compatible SQL Server
-    $stmtCheck = $pdo->prepare("SELECT [role] FROM users WHERE discord_id = ?");
+    $stmtCheck = $pdo->prepare("SELECT role FROM users WHERE discord_id = ?");
     $stmtCheck->execute([$_SESSION['user']['discord_id']]);
     $userFreshData = $stmtCheck->fetch(PDO::FETCH_ASSOC);
 
@@ -32,20 +31,20 @@ try {
     // Mise à jour si changement de rôle détecté
     if ($_SESSION['user']['role'] !== $userFreshData['role']) {
         $_SESSION['user']['role'] = $userFreshData['role'];
-        session_regenerate_id(true); // Sécurité accrue
+        session_regenerate_id(true); // Sécurité accrue lors d'un changement de privilèges
     }
 } catch (PDOException $e) {
-    error_log("Erreur Synchro Rôle: " . $e->getMessage());
+    // En production, on log l'erreur au lieu de l'afficher
+    error_log($e->getMessage());
 }
 
-// Variables d'affichage
 $role = $_SESSION['user']['role'];
 $discord_id = htmlspecialchars($_SESSION['user']['discord_id'] ?? 'User');
 $username = htmlspecialchars($_SESSION['user']['username'] ?? 'Utilisateur');
 $avatar_user = $_SESSION['user']['avatar'] ?? 'https://ui-avatars.com/api/?name='.urlencode($username).'&background=random';
 $current_page = basename($_SERVER['PHP_SELF']);
 
-// Titre dynamique
+// Titre dynamique propre
 $page_title = ucfirst(str_replace(['admin_', '.php', '_'], ['', '', ' '], $current_page));
 $logo_path = "includes/favicon.ico"; 
 ?>
@@ -163,7 +162,7 @@ $logo_path = "includes/favicon.ico";
 
             <div class="user-section d-flex align-items-center">
                 <button class="theme-toggle" id="themeBtn" title="Changer le mode">
-                    <i class="bi bi-sun-fill" id="themeIcon"></i>
+                    <i class="bi <?= (isset($_COOKIE['theme']) && $_COOKIE['theme'] == 'dark') ? 'bi-moon-stars-fill' : 'bi-sun-fill' ?>" id="themeIcon"></i>
                 </button>
 
                 <div class="user-badge">
@@ -187,11 +186,10 @@ $logo_path = "includes/favicon.ico";
         const themeIcon = document.getElementById('themeIcon');
         const htmlTag = document.documentElement;
 
+        // Mise à jour de l'icône au chargement selon le thème actif
         const updateIcon = (theme) => {
             themeIcon.className = theme === 'dark' ? 'bi bi-moon-stars-fill' : 'bi bi-sun-fill';
         };
-
-        // Initialisation icône
         updateIcon(htmlTag.getAttribute('data-bs-theme'));
 
         themeBtn.addEventListener('click', () => {
