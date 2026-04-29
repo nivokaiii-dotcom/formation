@@ -1,6 +1,13 @@
 <?php
 ob_start();
 require_once 'config.php';
+
+// Start session early so included files (like header) can rely on session data
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+
+require_once 'helpers/FormationFieldsHelper.php';
 require_once 'includes/header.php';
 
 // --- GESTION DE LA NAVIGATION TEMPORELLE ---
@@ -22,18 +29,26 @@ if ($nextMonth > 12) {
     $nextYear++;
 }
 
-// --- RÉPARATION DE L'ERREUR DEPRECATED ---
-$formatter = new IntlDateFormatter(
-    'fr_FR',
-    IntlDateFormatter::FULL,
-    IntlDateFormatter::NONE,
-    null,
-    null,
-    'MMMM yyyy'
-);
+// --- RÉPARATION DE L'ERREUR DEPRECATED / compatibilité si intl manquant ---
 $dateObj = new DateTime();
 $dateObj->setDate($currentYear, $currentMonth, 1);
-$displayDate = ucfirst($formatter->format($dateObj));
+
+if (class_exists('IntlDateFormatter')) {
+    $formatter = new IntlDateFormatter(
+        'fr_FR',
+        IntlDateFormatter::FULL,
+        IntlDateFormatter::NONE,
+        null,
+        null,
+        'MMMM yyyy'
+    );
+    $displayDate = ucfirst((string) $formatter->format($dateObj));
+} else {
+    // Fallback: use strftime with locale if intl extension is not available
+    // Try to set a French locale; this may vary per system.
+    setlocale(LC_TIME, 'fr_FR.UTF-8', 'fr_FR', 'fr');
+    $displayDate = ucfirst(strftime('%B %Y', $dateObj->getTimestamp()));
+}
 
 // --- CONFIGURATION ---
 $webhook = $_ENV['DISCORD_WEBHOOK_URL_DISPATCH'] ?? getenv('DISCORD_WEBHOOK_URL_DISPATCH');
@@ -138,6 +153,7 @@ function postToDiscord($content)
 }
 
 $isAdmin = (isset($_SESSION['user']) && $_SESSION['user']['role'] === 'admin');
+$helper = new FormationFieldsHelper($pdo);
 
 try {
     // 1. Stats
@@ -350,36 +366,27 @@ try {
         box-shadow: none;
     }
 
-    .staff-item {
-        background: rgba(120, 120, 120, 0.05);
-        padding: 5px 10px;
+    .custom-field-display {
+        background: rgba(79, 70, 229, 0.05);
+        border: 1px solid rgba(79, 70, 229, 0.2);
         border-radius: 8px;
-        margin-bottom: 4px;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        font-size: 0.85rem;
-    }
-
-    .btn-doc {
         padding: 8px 12px;
+        margin-bottom: 8px;
+        font-size: 0.9rem;
+    }
+
+    .custom-field-label {
         font-size: 0.75rem;
-        border-radius: 8px;
-        text-decoration: none;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-bottom: 6px;
+        text-transform: uppercase;
+        opacity: 0.7;
         font-weight: 600;
-        color: white !important;
+        letter-spacing: 0.5px;
+        display: block;
+        margin-bottom: 4px;
     }
 
-    .btn-canva {
-        background: #00c4cc;
-    }
-
-    .btn-forms {
-        background: #673ab7;
+    .custom-field-value {
+        word-break: break-word;
     }
 </style>
 
@@ -506,6 +513,20 @@ try {
                                     }
                                     ?>
                                 </div>
+
+                                <!-- AFFICHAGE DES CHAMPS DYNAMIQUES -->
+                                <?php
+                                $customFields = $helper->getFormationFields($f['id']);
+                                if (!empty($customFields)):
+                                    echo '<hr class="my-3">';
+                                    echo '<div class="mt-3">';
+                                    echo '<label class="fw-bold small mb-2 d-block opacity-50 text-uppercase" style="color: var(--text-main);">Champs Personnalisés</label>';
+                                    foreach ($customFields as $field):
+                                        echo $helper->displayField($field, $field['value']);
+                                    endforeach;
+                                    echo '</div>';
+                                endif;
+                                ?>
                             </td>
                         <?php endforeach; ?>
                     </tr>
@@ -553,7 +574,7 @@ try {
                             <?php foreach ($historiqueGlobal as $h): ?>
                                 <tr>
                                     <td><span class="fw-bold"><?= htmlspecialchars($h['pseudo']) ?></span><br><small
-                                            class="text-muted"><?= htmlspecialchars($h['formation_titre']) ?></small></td>
+                                            class="text-muted"><?= htmlspecialchars($h['formation_titre'] ?? 'N/A') ?></small></td>
                                     <td class="text-end text-muted"><?= date('d/m/Y', strtotime($h['date_reussite'])) ?>
                                     </td>
                                 </tr>

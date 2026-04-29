@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Hôte : 3f2b5f.myd.infomaniak.com
--- Généré le :  sam. 11 avr. 2026 à 14:18
+-- Généré le :  mer. 29 avr. 2026 à 11:07
 -- Version du serveur :  10.11.14-MariaDB-deb11-log
 -- Version de PHP :  7.4.33
 
@@ -21,8 +21,8 @@ SET time_zone = "+00:00";
 --
 -- Base de données :  `3f2b5f_formation`
 --
-CREATE DATABASE IF NOT EXISTS `formation` DEFAULT CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci;
-USE `formation`;
+CREATE DATABASE IF NOT EXISTS `3f2b5f_formation` DEFAULT CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci;
+USE `3f2b5f_formation`;
 
 -- --------------------------------------------------------
 
@@ -34,13 +34,6 @@ CREATE TABLE `discord_logs` (
   `id` int(11) NOT NULL DEFAULT 1,
   `message_id` varchar(255) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci;
-
---
--- Déchargement des données de la table `discord_logs`
---
-
-INSERT INTO `discord_logs` (`id`, `message_id`) VALUES
-(1, '1478114529274630245');
 
 -- --------------------------------------------------------
 
@@ -54,7 +47,6 @@ CREATE TABLE `formateurs` (
   `pseudo` varchar(100) NOT NULL,
   `created_at` timestamp NULL DEFAULT current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-
 
 -- --------------------------------------------------------
 
@@ -70,6 +62,52 @@ CREATE TABLE `formations` (
   `doc_link_2025` varchar(255) DEFAULT NULL,
   `doc_link_2026` varchar(255) DEFAULT NULL,
   `qst_link` varchar(255) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Structure de la table `formation_custom_fields`
+--
+
+CREATE TABLE `formation_custom_fields` (
+  `id` int(11) NOT NULL,
+  `formation_id` int(11) NOT NULL,
+  `field_name` varchar(255) NOT NULL,
+  `field_type` varchar(50) NOT NULL,
+  `label` varchar(255) NOT NULL,
+  `placeholder` varchar(255) DEFAULT NULL,
+  `required` tinyint(1) DEFAULT 0,
+  `order_index` int(11) DEFAULT 0,
+  `config` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL CHECK (json_valid(`config`)),
+  `created_at` timestamp NULL DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Structure de la table `formation_custom_field_types`
+--
+
+CREATE TABLE `formation_custom_field_types` (
+  `id` int(11) NOT NULL,
+  `name` varchar(50) NOT NULL,
+  `label` varchar(100) NOT NULL,
+  `description` text DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Structure de la table `formation_field_values`
+--
+
+CREATE TABLE `formation_field_values` (
+  `id` int(11) NOT NULL,
+  `formation_id` int(11) NOT NULL,
+  `custom_field_id` int(11) NOT NULL,
+  `value` longtext DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
@@ -142,6 +180,9 @@ CREATE TABLE `users` (
   `created_at` timestamp NULL DEFAULT current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
+--
+-- Index pour les tables déchargées
+--
 
 --
 -- Index pour la table `discord_logs`
@@ -161,6 +202,31 @@ ALTER TABLE `formateurs`
 --
 ALTER TABLE `formations`
   ADD PRIMARY KEY (`id`);
+
+--
+-- Index pour la table `formation_custom_fields`
+--
+ALTER TABLE `formation_custom_fields`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `formation_idx` (`formation_id`),
+  ADD KEY `order_idx` (`formation_id`,`order_index`),
+  ADD KEY `field_type` (`field_type`);
+
+--
+-- Index pour la table `formation_custom_field_types`
+--
+ALTER TABLE `formation_custom_field_types`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `name` (`name`);
+
+--
+-- Index pour la table `formation_field_values`
+--
+ALTER TABLE `formation_field_values`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `unique_field_value` (`formation_id`,`custom_field_id`),
+  ADD KEY `formation_idx` (`formation_id`),
+  ADD KEY `custom_field_id` (`custom_field_id`);
 
 --
 -- Index pour la table `formation_staff`
@@ -205,47 +271,79 @@ ALTER TABLE `users`
 -- AUTO_INCREMENT pour la table `formateurs`
 --
 ALTER TABLE `formateurs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=20;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT pour la table `formations`
 --
 ALTER TABLE `formations`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=14;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT pour la table `formation_custom_fields`
+--
+ALTER TABLE `formation_custom_fields`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT pour la table `formation_custom_field_types`
+--
+ALTER TABLE `formation_custom_field_types`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT pour la table `formation_field_values`
+--
+ALTER TABLE `formation_field_values`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT pour la table `formation_staff`
 --
 ALTER TABLE `formation_staff`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=41;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT pour la table `logs`
 --
 ALTER TABLE `logs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=16;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT pour la table `membres_formes`
 --
 ALTER TABLE `membres_formes`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=333;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT pour la table `planning`
 --
 ALTER TABLE `planning`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=41;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT pour la table `users`
 --
 ALTER TABLE `users`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
 -- Contraintes pour les tables déchargées
 --
+
+--
+-- Contraintes pour la table `formation_custom_fields`
+--
+ALTER TABLE `formation_custom_fields`
+  ADD CONSTRAINT `formation_custom_fields_ibfk_1` FOREIGN KEY (`formation_id`) REFERENCES `formations` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `formation_custom_fields_ibfk_2` FOREIGN KEY (`field_type`) REFERENCES `formation_custom_field_types` (`name`);
+
+--
+-- Contraintes pour la table `formation_field_values`
+--
+ALTER TABLE `formation_field_values`
+  ADD CONSTRAINT `formation_field_values_ibfk_1` FOREIGN KEY (`formation_id`) REFERENCES `formations` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `formation_field_values_ibfk_2` FOREIGN KEY (`custom_field_id`) REFERENCES `formation_custom_fields` (`id`) ON DELETE CASCADE;
 
 --
 -- Contraintes pour la table `formation_staff`

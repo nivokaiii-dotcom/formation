@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>500 - Erreur Serveur | Staff Panel</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    <style>
+        body {
+            background: #0f172a;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Inter', sans-serif;
+            color: white;
+            overflow: hidden;
+        }
+        .error-card {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 1.5rem;
+            padding: 3rem;
+            width: 100%;
+            max-width: 500px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            text-align: center;
+            position: relative;
+        }
+        .error-code {
+            font-size: 6rem;
+            font-weight: 800;
+            line-height: 1;
+            /* Changement pour un dégradé plus chaud/alerte */
+            background: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 1rem;
+        }
+        .icon-box {
+            font-size: 4rem;
+            color: #ef4444;
+            margin-bottom: 1rem;
+            opacity: 0.15;
+            position: absolute;
+            top: 20px;
+            right: 30px;
+        }
+        .btn-refresh {
+            background: #334155;
+            color: white;
+            border: 1px solid #475569;
+            padding: 0.8rem 2rem;
+            border-radius: 0.75rem;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 1.5rem;
+        }
+        .btn-refresh:hover {
+            background: #475569;
+            transform: translateY(-2px);
+            color: white;
+        }
+        .text-muted { color: #94a3b8 !important; }
+        
+        /* Animation simple pour l'icône de maintenance */
+        .bi-gear-fill {
+            display: inline-block;
+            animation: rotate 4s linear infinite;
+        }
+        @keyframes rotate {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="error-card">
+        <div class="icon-box">
+            <i class="bi bi-gear-fill"></i>
+        </div>
+        
+        <div class="error-code">500</div>
+        
+        <h2 class="fw-bold mb-3">Erreur Interne</h2>
+        
+        <p class="text-muted mb-4">
+            Le serveur a rencontré un problème inattendu. Nos techniciens (ou vos scripts) sont probablement en train de transpirer.
+        </p>
+
+        <div class="d-grid gap-2 d-sm-flex justify-content-sm-center">
+            <a href="javascript:location.reload();" class="btn-refresh">
+                <i class="bi bi-arrow-clockwise"></i>
+                Réessayer
+            </a>
+            <a href="index.php" class="btn-refresh" style="background: #3b82f6; border-color: #3b82f6;">
+                <i class="bi bi-house-door-fill"></i>
+                Accueil
+            </a>
+        </div>
+
+        <div class="mt-5 pt-3 border-top border-secondary">
+            <p class="text-muted mb-0 small">
+                Si le problème persiste, vérifiez les logs d'erreurs PHP de votre serveur.
+            </p>
+        </div>
+    </div>
+
+</body>
+</html>

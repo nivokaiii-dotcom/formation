@@ -133,7 +133,7 @@ $totalFormateurs = count($formateurs);
                     ?>
                         <tr class="formateur-row">
                             <td class="ps-3">
-                                <img src="<?= $pp ?>" alt="Avatar" class="rounded-circle profile-img" width="45" height="45">
+                                <img src="<?= htmlspecialchars($pp) ?>" alt="Avatar" class="rounded-circle profile-img" width="45" height="45" loading="lazy">
                             </td>
                             <td>
                                 <span class="fw-bold pseudo-name dynamic-text"><?= htmlspecialchars($f['pseudo']); ?></span>
@@ -147,6 +147,7 @@ $totalFormateurs = count($formateurs);
                             </td>
                         </tr>
 
+                        <!-- Modal Modification -->
                         <div class="modal fade" id="editModal<?= $f['id']; ?>" tabindex="-1" aria-hidden="true">
                             <div class="modal-dialog modal-dialog-centered">
                                 <div class="modal-content">
@@ -175,11 +176,14 @@ $totalFormateurs = count($formateurs);
                             </div>
                         </div>
 
+                        <!-- Modal Suppression -->
                         <div class="modal fade" id="deleteModal<?= $f['id']; ?>" tabindex="-1" aria-hidden="true">
                             <div class="modal-dialog modal-dialog-centered">
                                 <div class="modal-content">
                                     <form method="POST">
-                                        <div class="modal-header border-0"><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
+                                        <div class="modal-header border-0">
+                                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                                        </div>
                                         <div class="modal-body text-center py-4">
                                             <input type="hidden" name="id" value="<?= $f['id']; ?>">
                                             <i class="bi bi-exclamation-octagon text-danger" style="font-size: 3.5rem;"></i>
@@ -205,6 +209,7 @@ $totalFormateurs = count($formateurs);
     </div>
 </div>
 
+<!-- Modal Ajout Formateur -->
 <div class="modal fade" id="addModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content border-0 shadow">

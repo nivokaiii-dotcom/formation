@@ -1,0 +1,15 @@
+# 1. Empêcher le listage des répertoires (Sécurité)
+Options -Indexes
+
+# 2. Définition des pages d'erreur avec chemins absolus
+# Utiliser /404.php (ou .html) assure que l'erreur s'affiche 
+# même si l'utilisateur est dans un sous-dossier.
+ErrorDocument 404 /404.html
+ErrorDocument 403 /404.html
+ErrorDocument 500 /500.html
+
+# 3. Protection du fichier de configuration
+<Files "config.php">
+    Order allow,deny
+    Deny from all
+</Files>
